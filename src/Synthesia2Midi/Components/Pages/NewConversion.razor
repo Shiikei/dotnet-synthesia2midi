@@ -1,0 +1,991 @@
+@page "/nouvelle"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject AppDbContext Db
+@inject ConversionQueue Queue
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ThresholdPreviewService Preview
+@using System.Net
+@using System.Text.Json
+
+<PageTitle>Nouvelle conversion · syn2mid</PageTitle>
+
+<h1 class="s2m-page-title">Nouvelle conversion</h1>
+@if (_redoTitle is not null)
+{
+    <p class="s2m-meta">Réglages repris de « @_redoTitle ». L'ancienne conversion reste dans l'historique.</p>
+}
+@if (_redoNote is not null)
+{
+    <p class="s2m-field-error" role="alert"><Icon Name="alert" Size="16" /><span>@_redoNote</span></p>
+}
+
+<div class="s2m-stack">
+    <div class="s2m-field">
+        <div class="s2m-field-head"><span class="s2m-field-label" id="source-label">Source</span></div>
+        <div class="s2m-seg" role="radiogroup" aria-labelledby="source-label">
+            <button type="button" role="radio" aria-checked="@Aria(_source == ConversionSource.Url)"
+                    class="s2m-seg-opt @On(_source == ConversionSource.Url)" @onclick="() => _source = ConversionSource.Url">
+                <Icon Name="link" Size="16" /><span>Lien YouTube</span>
+            </button>
+            <button type="button" role="radio" aria-checked="@Aria(_source == ConversionSource.Upload)"
+                    class="s2m-seg-opt @On(_source == ConversionSource.Upload)" @onclick="() => _source = ConversionSource.Upload">
+                <Icon Name="video" Size="16" /><span>Fichier vidéo</span>
+            </button>
+        </div>
+    </div>
+
+    @if (_source == ConversionSource.Url)
+    {
+        <div class="s2m-field @(UrlError is null ? null : "is-invalid")">
+            <div class="s2m-field-head">
+                <label class="s2m-field-label" for="video-url">Lien de la vidéo</label>
+            </div>
+            <div class="s2m-input has-icon">
+                <Icon Name="link" Size="18" Class="s2m-input-icon" />
+                <input id="video-url" class="is-mono" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+                       value="@_url" @oninput="OnUrlInput"
+                       placeholder="https://www.youtube.com/watch?v=…"
+                       aria-invalid="@(UrlError is null ? null : "true")" aria-describedby="video-url-hint" />
+            </div>
+            @if (UrlError is not null)
+            {
+                <p class="s2m-field-error" id="video-url-hint" role="alert"><Icon Name="alert" Size="16" /><span>@UrlError</span></p>
+            }
+            else
+            {
+                <p class="s2m-field-hint" id="video-url-hint">Une vidéo de piano au rendu Synthesia : les touches jouées doivent s'allumer en couleur.</p>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="s2m-field s2m-file @(_uploadError is null ? null : "is-invalid")">
+            <div class="s2m-field-head">
+                <label class="s2m-field-label" for="video-file">Fichier vidéo</label>
+                @if (_uploadedSize is not null)
+                {
+                    <span class="s2m-field-aside">@_uploadedSize</span>
+                }
+            </div>
+            <InputFile id="video-file" OnChange="OnFileSelectedAsync" accept="video/*" disabled="@_uploading" />
+            @if (_uploadError is not null)
+            {
+                <p class="s2m-field-error" role="alert"><Icon Name="alert" Size="16" /><span>@_uploadError</span></p>
+            }
+            else if (_uploading)
+            {
+                <p class="s2m-field-hint">Envoi du fichier…</p>
+            }
+            else if (_uploadedName is not null)
+            {
+                <p class="s2m-field-hint">Reçu : @_uploadedName</p>
+            }
+            else
+            {
+                <p class="s2m-field-hint">MP4, MKV ou WebM, 2 Go au plus.</p>
+            }
+        </div>
+    }
+</div>
+
+@if (ShowSettings)
+{
+    <div class="@(VideoId is not null && _source == ConversionSource.Url ? "s2m-split" : "s2m-stack")">
+        @if (VideoId is not null && _source == ConversionSource.Url)
+        {
+            <figure class="s2m-video">
+                <div class="s2m-video-frame is-draggable @(_playInline ? "is-playing" : null)" @ref="_frame">
+                    @if (_playInline)
+                    {
+                        <iframe src="https://www.youtube-nocookie.com/embed/@VideoId?autoplay=1&rel=0"
+                                title="Aperçu de la vidéo"
+                                allow="autoplay; encrypted-media; picture-in-picture"
+                                allowfullscreen></iframe>
+                    }
+                    else
+                    {
+                        <img class="s2m-video-img" src="@(_probeFrameUrl ?? $"https://img.youtube.com/vi/{VideoId}/hqdefault.jpg")" alt="" draggable="false" />
+                        @if (_probeFrameUrl is not null)
+                        {
+                            <span class="s2m-video-chip">Image à @UiFormat.Time(_probeStart)</span>
+                        }
+                    }
+                    <div class="s2m-video-line" style="top: @UiFormat.Inv(_keyboardHeight * 100)%">
+                        <span class="s2m-video-line-tag"><Icon Name="piano" Size="14" />Clavier · <b class="is-mono">@UiFormat.Percent(_keyboardHeight * 100)</b></span>
+                    </div>
+                </div>
+                <figcaption class="s2m-video-meta">
+                    <span class="s2m-video-title">@(_videoTitle ?? "Vidéo YouTube")</span>
+                    @if (_videoChannel is not null)
+                    {
+                        <span class="s2m-video-sub">@_videoChannel</span>
+                    }
+                </figcaption>
+                <div class="s2m-row">
+                    @if (!_embedBlocked)
+                    {
+                        <button type="button" class="s2m-btn s2m-btn-secondary s2m-btn-sm" @onclick="() => _playInline = !_playInline">
+                            <Icon Name="@(_playInline ? "stop" : "play")" Size="18" />
+                            <span class="s2m-btn-label">@(_playInline ? "Arrêter l'aperçu" : "Lire l'aperçu")</span>
+                        </button>
+                    }
+                    <a class="s2m-btn s2m-btn-ghost s2m-btn-sm" href="https://www.youtube.com/watch?v=@VideoId" target="_blank" rel="noopener">
+                        <span class="s2m-btn-label">Ouvrir sur YouTube</span><Icon Name="arrowRight" Size="18" />
+                    </a>
+                </div>
+                @if (_embedBlocked)
+                {
+                    <p class="s2m-field-hint">La chaîne a désactivé la lecture sur d'autres sites : l'aperçu ne peut pas être lu ici. La conversion fonctionne quand même.</p>
+                }
+                else if (_videoMissing)
+                {
+                    <p class="s2m-field-hint">YouTube ne trouve pas cette vidéo : elle est peut-être privée ou supprimée.</p>
+                }
+            </figure>
+            @ProbePanel
+        }
+        else if (_source == ConversionSource.Upload)
+        {
+            @ProbePanel
+        }
+
+        <div class="s2m-stack">
+            <div class="s2m-field @(_submitAttempted && TimeError is not null ? "is-invalid" : null)">
+                <div class="s2m-field-head">
+                    <span class="s2m-field-label" id="range-label">Extrait</span>
+                    @if (ExtractDuration is double d)
+                    {
+                        <span class="s2m-field-aside">Durée @UiFormat.Time(d)</span>
+                    }
+                </div>
+                <div class="s2m-times" role="group" aria-labelledby="range-label">
+                    <label class="s2m-time">
+                        <span class="s2m-time-label">Début</span>
+                        <input class="is-mono" inputmode="numeric" autocomplete="off" value="@_startText" @oninput="OnStartInput"
+                               placeholder="00:00" aria-label="Début (mm:ss)" />
+                    </label>
+                    <label class="s2m-time">
+                        <span class="s2m-time-label">Fin</span>
+                        <input class="is-mono" inputmode="numeric" autocomplete="off" value="@_endText" @oninput="OnEndInput"
+                               placeholder="fin" aria-label="Fin (mm:ss)" />
+                    </label>
+                </div>
+                @if (_submitAttempted && TimeError is not null)
+                {
+                    <p class="s2m-field-error" role="alert"><Icon Name="alert" Size="16" /><span>@TimeError</span></p>
+                }
+                else
+                {
+                    <p class="s2m-field-hint">Passez l'intro, et commencez à un instant où les mains ne cachent pas le clavier.</p>
+                }
+            </div>
+
+            <div class="s2m-field">
+                <div class="s2m-field-head">
+                    <label class="s2m-field-label" for="kb-height">Hauteur du clavier</label>
+                    <span class="s2m-field-aside"><output for="kb-height" class="is-mono">@UiFormat.Percent(_keyboardHeight * 100)</output></span>
+                </div>
+                <div class="s2m-slider" style="--s2m-pct: @UiFormat.Inv(SliderPct(_keyboardHeight, KbMin, KbMax))%">
+                    <input id="kb-height" type="range" min="@UiFormat.Inv(KbMin)" max="@UiFormat.Inv(KbMax)" step="0.01"
+                           value="@UiFormat.Inv(_keyboardHeight)" @oninput="OnKeyboardInput"
+                           aria-valuetext="@UiFormat.Percent(_keyboardHeight * 100)" aria-describedby="kb-height-hint" />
+                    <div class="s2m-slider-ends" aria-hidden="true"><span>Haut de l'image</span><span>Bas</span></div>
+                </div>
+                <p class="s2m-field-hint" id="kb-height-hint">
+                    Placez la ligne sur la rangée des touches noires.@(VideoId is not null && _source == ConversionSource.Url ? " Vous pouvez aussi la faire glisser sur l'aperçu." : null)
+                </p>
+            </div>
+
+            <div class="s2m-field">
+                <div class="s2m-field-head">
+                    <label class="s2m-field-label" for="threshold">Seuil de détection</label>
+                    <span class="s2m-field-aside"><output for="threshold" class="is-mono">@_threshold</output></span>
+                </div>
+                <div class="s2m-slider" style="--s2m-pct: @UiFormat.Inv(SliderPct(_threshold, ThMin, ThMax))%">
+                    <input id="threshold" type="range" min="@ThMin" max="@ThMax" step="5"
+                           value="@_threshold" @oninput="OnThresholdInput" aria-describedby="threshold-hint" />
+                    <div class="s2m-slider-ends" aria-hidden="true"><span>Sensible</span><span>Strict</span></div>
+                </div>
+                <p class="s2m-field-hint" id="threshold-hint">30 par défaut. Montez-le si des notes parasites apparaissent. Le test sur un extrait montre son effet en direct.</p>
+            </div>
+
+            <div class="s2m-field">
+                <div class="s2m-field-head"><span class="s2m-field-label" id="hands-label">Séparation des mains</span></div>
+                <div class="s2m-seg" role="radiogroup" aria-labelledby="hands-label">
+                    <button type="button" role="radio" aria-checked="@Aria(!_separateHands)" class="s2m-seg-opt @On(!_separateHands)" @onclick="() => SetHands(false)">
+                        <span>Aucune</span>
+                    </button>
+                    <button type="button" role="radio" aria-checked="@Aria(_separateHands)" class="s2m-seg-opt @On(_separateHands)" @onclick="() => SetHands(true)">
+                        <Icon Name="hand" Size="16" /><span>Par couleur</span>
+                    </button>
+                </div>
+                <p class="s2m-field-hint">
+                    @(_separateHands
+                        ? "Une piste MIDI par main, d'après la couleur des notes dans la vidéo."
+                        : "Toutes les notes sur une seule piste.")
+                </p>
+            </div>
+
+            <div class="s2m-field">
+                <div class="s2m-field-head"><span class="s2m-field-label" id="tempo-label">Tempo</span></div>
+                <div class="s2m-seg" role="radiogroup" aria-labelledby="tempo-label">
+                    <button type="button" role="radio" aria-checked="@Aria(_detectTempo)" class="s2m-seg-opt @On(_detectTempo)" @onclick="() => _detectTempo = true">
+                        <span>Détecter</span>
+                    </button>
+                    <button type="button" role="radio" aria-checked="@Aria(!_detectTempo)" class="s2m-seg-opt @On(!_detectTempo)" @onclick="() => _detectTempo = false">
+                        <span>Fixe</span>
+                    </button>
+                </div>
+                <p class="s2m-field-hint">
+                    @(_detectTempo
+                        ? "Le tempo est estimé à partir de l'écart entre les notes, puis écrit dans le MIDI."
+                        : "Le MIDI garde le tempo par défaut.")
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="s2m-actionbar">
+        <button type="button" class="s2m-btn s2m-btn-primary s2m-btn-lg" disabled="@(!CanSubmit || _submitting)"
+                aria-busy="@(_submitting ? "true" : null)" @onclick="SubmitAsync">
+            <Icon Name="@(_submitting ? "spinner" : "note")" Size="18" />
+            <span class="s2m-btn-label">@(_submitting ? "Conversion…" : "Convertir")</span>
+        </button>
+    </div>
+}
+
+@code {
+    private static readonly HttpClient OEmbedClient = new() { Timeout = TimeSpan.FromSeconds(6) };
+
+    private const double KbMin = 0.05;
+    private const double KbMax = 0.95;
+    private const int ThMin = 10;
+    private const int ThMax = 200;
+
+    private ConversionSource _source = ConversionSource.Url;
+
+    // « Refaire la conversion » depuis la page de détail : /nouvelle?depuis=<id>.
+    [SupplyParameterFromQuery(Name = "depuis")]
+    public Guid? RedoFromId { get; set; }
+
+    private string? _redoTitle;
+    private string? _redoNote;
+    private string? _url;
+
+    private string? _uploadedFilePath;
+    private string? _uploadedName;
+    private string? _uploadedSize;
+    private string? _uploadError;
+    private bool _uploading;
+
+    // Aperçu : miniature par défaut (toujours disponible), lecteur YouTube au clic.
+    private bool _playInline;
+    private bool _embedBlocked;
+    private bool _videoMissing;
+    private string? _videoTitle;
+    private string? _videoChannel;
+    private string? _metaForId;
+
+    private double _keyboardHeight = 0.75;
+    private int _threshold = 30;
+    private bool _separateHands;
+    private bool _detectTempo = true;
+    private string? _startText;
+    private string? _endText;
+
+    private bool _submitAttempted;
+    private bool _submitting;
+
+    private ElementReference _frame;
+    private string? _boundFrameId;
+    private DotNetObjectReference<NewConversion>? _selfRef;
+
+    private string? VideoId => ExtractYouTubeId(_url);
+
+    private string? UrlError => !string.IsNullOrWhiteSpace(_url) && VideoId is null
+        ? "Ce lien ne pointe pas vers une vidéo YouTube. Copiez l'adresse depuis la page de la vidéo."
+        : null;
+
+    private bool ShowSettings => _source == ConversionSource.Url ? VideoId is not null : _uploadedFilePath is not null;
+
+    private bool CanSubmit => _source == ConversionSource.Url
+        ? VideoId is not null
+        : _uploadedFilePath is not null && !_uploading;
+
+    private string? TimeError
+    {
+        get
+        {
+            if (!UiFormat.TryParseTime(_startText, out var start))
+            {
+                return "Début : écrivez un temps au format mm:ss, par exemple 00:06.";
+            }
+            if (!UiFormat.TryParseTime(_endText, out var end))
+            {
+                return "Fin : écrivez un temps au format mm:ss, par exemple 03:10, ou laissez vide.";
+            }
+            if (start is double s && end is double e && e <= s)
+            {
+                return "La fin doit venir après le début.";
+            }
+            return null;
+        }
+    }
+
+    private double? ExtractDuration =>
+        UiFormat.TryParseTime(_startText, out var s) && UiFormat.TryParseTime(_endText, out var e) && e is double end && end > (s ?? 0)
+            ? end - (s ?? 0)
+            : null;
+
+    private static string Aria(bool on) => on ? "true" : "false";
+    private static string? On(bool on) => on ? "is-on" : null;
+    private static double SliderPct(double value, double min, double max) => (value - min) / (max - min) * 100;
+
+    private void OnStartInput(ChangeEventArgs e)
+    {
+        _startText = e.Value?.ToString();
+        ScheduleProbe(TimeSpan.FromMilliseconds(900));
+    }
+    private void OnEndInput(ChangeEventArgs e) => _endText = e.Value?.ToString();
+
+    private void OnKeyboardInput(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v))
+        {
+            _keyboardHeight = Math.Clamp(Math.Round(v, 2), KbMin, KbMax);
+            ScheduleProbe(TimeSpan.FromMilliseconds(350));
+        }
+    }
+
+    private async Task OnThresholdInput(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+        {
+            _threshold = Math.Clamp(v, ThMin, ThMax);
+            await RedrawProbeAsync();
+        }
+    }
+
+    [JSInvokable]
+    public Task SetKeyboardLine(double value) => InvokeAsync(() =>
+    {
+        _keyboardHeight = Math.Clamp(Math.Round(value, 2), KbMin, KbMax);
+        ScheduleProbe(TimeSpan.FromMilliseconds(350));
+        StateHasChanged();
+    });
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (RedoFromId is not Guid id)
+        {
+            return;
+        }
+
+        var previous = await Db.Conversions.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id);
+        if (previous is null)
+        {
+            _redoNote = "Cette conversion n'existe plus : remplissez le formulaire normalement.";
+            return;
+        }
+
+        _redoTitle = previous.Title;
+
+        ConversionSettings? settings = null;
+        try
+        {
+            settings = JsonSerializer.Deserialize<ConversionSettings>(previous.SettingsJson ?? "{}");
+        }
+        catch (JsonException)
+        {
+        }
+
+        if (settings is not null)
+        {
+            _keyboardHeight = Math.Clamp(Math.Round(settings.KeyboardHeight, 2), KbMin, KbMax);
+            _threshold = Math.Clamp(settings.Threshold, ThMin, ThMax);
+            _separateHands = settings.SeparateHandsByColor;
+            _detectTempo = settings.DetectTempo;
+            _startText = UiFormat.TimeInput(settings.Start);
+            _endText = UiFormat.TimeInput(settings.End);
+        }
+
+        if (!string.IsNullOrWhiteSpace(previous.SourceUrl))
+        {
+            _source = ConversionSource.Url;
+            _url = previous.SourceUrl;
+            if (VideoId is string videoId)
+            {
+                _metaForId = videoId;
+                _ = LoadVideoMetaAsync(videoId);
+            }
+        }
+        else if (previous.SourceFileName is string path && File.Exists(path))
+        {
+            _source = ConversionSource.Upload;
+            _uploadedFilePath = path;
+            var fileName = Path.GetFileName(path);
+            // Les fichiers envoyés sont stockés sous « <guid>_<nom d'origine> ».
+            _uploadedName = fileName.Length > 37 && fileName[36] == '_' ? fileName[37..] : fileName;
+            _uploadedSize = UiFormat.FileSize(new FileInfo(path).Length);
+        }
+        else if (previous.SourceFileName is not null)
+        {
+            _source = ConversionSource.Upload;
+            _redoNote = "Le fichier vidéo de cette conversion n'est plus sur le serveur : envoyez-le à nouveau. Les réglages sont repris.";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Brancher le glisser de la ligne du clavier sur le cadre vidéo dès qu'il existe
+        // (et de nouveau s'il est recréé, par exemple après un changement de source).
+        if (ShowSettings && VideoId is not null && _frame.Id is not null && _frame.Id != _boundFrameId)
+        {
+            _boundFrameId = _frame.Id;
+            _selfRef ??= DotNetObjectReference.Create(this);
+            try
+            {
+                await JS.InvokeVoidAsync("s2mUi.bindKeyboardLine", _frame, _selfRef);
+            }
+            catch (JSException)
+            {
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+
+        await SyncProbeCanvasAsync();
+    }
+
+    private void OnUrlInput(ChangeEventArgs e)
+    {
+        var newUrl = e.Value?.ToString();
+        var newId = ExtractYouTubeId(newUrl);
+
+        // Comparaison AVANT d'écraser _url : VideoId reflète encore l'ancienne URL ici.
+        if (newId != VideoId)
+        {
+            ResetProbe();
+            _playInline = false;
+            _embedBlocked = false;
+            _videoMissing = false;
+            _videoTitle = null;
+            _videoChannel = null;
+        }
+
+        _url = newUrl;
+
+        if (newId is not null && newId != _metaForId)
+        {
+            _metaForId = newId;
+            _ = LoadVideoMetaAsync(newId);
+        }
+    }
+
+    // Titre et chaîne via l'oEmbed public de YouTube (sans clé). Un 401/403 signifie que
+    // la chaîne a désactivé l'intégration : on le dit au lieu d'afficher l'écran d'erreur.
+    private async Task LoadVideoMetaAsync(string id)
+    {
+        string? title = null, channel = null;
+        var blocked = false;
+        var missing = false;
+        try
+        {
+            var target = Uri.EscapeDataString($"https://www.youtube.com/watch?v={id}");
+            using var response = await OEmbedClient.GetAsync($"https://www.youtube.com/oembed?format=json&url={target}");
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                blocked = true;
+            }
+            else if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest)
+            {
+                missing = true;
+            }
+            else if (response.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                title = doc.RootElement.TryGetProperty("title", out var t) ? t.GetString() : null;
+                channel = doc.RootElement.TryGetProperty("author_name", out var a) ? a.GetString() : null;
+            }
+        }
+        catch (Exception)
+        {
+            // Hors ligne ou YouTube injoignable : l'aperçu reste sur la miniature, sans titre.
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                if (id != VideoId)
+                {
+                    return;
+                }
+                _videoTitle = title;
+                _videoChannel = channel;
+                _embedBlocked = blocked;
+                _videoMissing = missing;
+                if (blocked)
+                {
+                    _playInline = false;
+                }
+                StateHasChanged();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private static string? ExtractYouTubeId(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var host = uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase)
+            ? uri.Host[4..]
+            : uri.Host;
+
+        if (host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase))
+        {
+            return AsValidId(uri.AbsolutePath.Trim('/'));
+        }
+
+        if (!host.Equals("youtube.com", StringComparison.OrdinalIgnoreCase) &&
+            !host.Equals("m.youtube.com", StringComparison.OrdinalIgnoreCase) &&
+            !host.Equals("music.youtube.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("v", out var v))
+        {
+            var idFromQuery = AsValidId(v.ToString());
+            if (idFromQuery is not null)
+            {
+                return idFromQuery;
+            }
+        }
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 2 && segments[0] is "embed" or "shorts" or "v" or "live"
+            ? AsValidId(segments[1])
+            : null;
+
+        static string? AsValidId(string? candidate) =>
+            candidate is { Length: 11 } && candidate.All(c => char.IsLetterOrDigit(c) || c is '_' or '-')
+                ? candidate
+                : null;
+    }
+
+    private async Task OnFileSelectedAsync(InputFileChangeEventArgs e)
+    {
+        ResetProbe();
+        _uploadError = null;
+        _uploading = true;
+        _uploadedFilePath = null;
+        _uploadedName = null;
+        _uploadedSize = null;
+        try
+        {
+            var uploadsDir = Path.Combine(Environment.GetEnvironmentVariable("DATA_DIR") ?? "/data", "uploads");
+            Directory.CreateDirectory(uploadsDir);
+            var destination = Path.Combine(uploadsDir, $"{Guid.NewGuid()}_{e.File.Name}");
+
+            await using (var stream = e.File.OpenReadStream(maxAllowedSize: 2_000_000_000)) // 2 Go
+            await using (var fileStream = File.Create(destination))
+            {
+                await stream.CopyToAsync(fileStream);
+            }
+
+            _uploadedFilePath = destination;
+            _uploadedName = e.File.Name;
+            _uploadedSize = UiFormat.FileSize(e.File.Size);
+        }
+        catch (IOException ex) when (ex.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase))
+        {
+            _uploadError = "Ce fichier dépasse 2 Go. Raccourcissez la vidéo ou utilisez un lien YouTube.";
+        }
+        catch (Exception)
+        {
+            _uploadError = "L'envoi du fichier a échoué. Réessayez, ou utilisez un lien YouTube.";
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _submitAttempted = true;
+        if (!CanSubmit || TimeError is not null || _submitting)
+        {
+            return;
+        }
+
+        _submitting = true;
+
+        UiFormat.TryParseTime(_startText, out var start);
+        UiFormat.TryParseTime(_endText, out var end);
+
+        var settings = new ConversionSettings
+        {
+            KeyboardHeight = _keyboardHeight,
+            Threshold = _threshold,
+            SeparateHandsByColor = _separateHands,
+            DetectTempo = _detectTempo,
+            Start = start is double s ? TimeSpan.FromSeconds(s) : null,
+            End = end is double en ? TimeSpan.FromSeconds(en) : null,
+        };
+
+        var isUrl = _source == ConversionSource.Url;
+        var conversion = new Conversion
+        {
+            SourceUrl = isUrl ? _url?.Trim() : null,
+            SourceFileName = isUrl ? null : _uploadedFilePath,
+            // Remplacé par le vrai titre YouTube dès la fin du téléchargement.
+            Title = isUrl
+                ? (_videoTitle ?? _url?.Trim() ?? "Sans titre")
+                : (_uploadedName ?? "Sans titre"),
+            SettingsJson = JsonSerializer.Serialize(settings),
+        };
+
+        Db.Conversions.Add(conversion);
+        await Db.SaveChangesAsync();
+        await Queue.EnqueueAsync(conversion.Id);
+
+        Nav.NavigateTo($"/conversions/{conversion.Id}");
+    }
+
+
+    // ---------- Test du seuil sur un extrait ----------
+    // Le serveur lit une seule fois 10 s de vidéo à partir de « Début » et garde, pour
+    // chaque image et chaque touche, l'écart à la référence « repos ». Le seuil se teste
+    // ensuite sans rien relancer ; la ligne du clavier et le début relancent la lecture.
+
+    private enum ProbePhase { Idle, Fetching, Analyzing, Ready, Failed }
+
+    private ProbePhase _probePhase;
+    private bool _probeActive;
+    private ThresholdProbe? _probe;
+    private ProbeStats? _probeStats;
+    private PreviewClip? _probeClip;
+    private string? _probeClipSource;
+    private string? _probeError;
+    private string? _probeFrameUrl;
+    private double _probeStart;
+    private int _probeVersion;
+    private int _probeSentVersion;
+    private ElementReference _probeCanvas;
+    private string? _probeCanvasId;
+    private CancellationTokenSource? _probeCts;
+
+    private string? ProbeSource => _source == ConversionSource.Url
+        ? (VideoId is string id ? $"https://www.youtube.com/watch?v={id}" : null)
+        : _uploadedFilePath;
+
+    private bool ProbeBusy => _probePhase is ProbePhase.Fetching or ProbePhase.Analyzing;
+
+    private void StartProbe()
+    {
+        _probeActive = true;
+        ScheduleProbe(TimeSpan.Zero);
+    }
+
+    private void ScheduleProbe(TimeSpan delay)
+    {
+        if (!_probeActive)
+        {
+            return;
+        }
+        _probeCts?.Cancel();
+        _probeCts = new CancellationTokenSource();
+        _ = RunProbeAsync(delay, _probeCts.Token);
+    }
+
+    private void ResetProbe()
+    {
+        _probeCts?.Cancel();
+        _probeActive = false;
+        _probe = null;
+        _probeStats = null;
+        _probeClip = null;
+        _probeClipSource = null;
+        _probeError = null;
+        _probeFrameUrl = null;
+        _probePhase = ProbePhase.Idle;
+        _probeVersion++;
+    }
+
+    private async Task RunProbeAsync(TimeSpan delay, CancellationToken ct)
+    {
+        try
+        {
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, ct);
+            }
+
+            var source = ProbeSource;
+            if (source is null)
+            {
+                return;
+            }
+
+            if (!UiFormat.TryParseTime(_startText, out var parsedStart))
+            {
+                await InvokeAsync(() =>
+                {
+                    _probePhase = ProbePhase.Failed;
+                    _probeError = "Corrigez le début (mm:ss) pour relancer le test.";
+                    StateHasChanged();
+                });
+                return;
+            }
+
+            var start = Math.Round(Math.Max(0, parsedStart ?? 0), 1);
+            var keyboard = _keyboardHeight;
+            var isUrl = _source == ConversionSource.Url;
+            var needClip = _probeClip is null || _probeClipSource != source || _probeClip.StartSeconds != start;
+
+            await InvokeAsync(() =>
+            {
+                _probePhase = needClip ? ProbePhase.Fetching : ProbePhase.Analyzing;
+                _probeError = null;
+                StateHasChanged();
+            });
+
+            var clip = needClip ? await Preview.GetClipAsync(source, isUrl, start, ct) : _probeClip!;
+            ct.ThrowIfCancellationRequested();
+
+            if (needClip)
+            {
+                await InvokeAsync(() =>
+                {
+                    _probeClip = clip;
+                    _probeClipSource = source;
+                    _probeFrameUrl = isUrl ? clip.FrameUrl : null;
+                    _probeStart = clip.StartSeconds;
+                    _probePhase = ProbePhase.Analyzing;
+                    StateHasChanged();
+                });
+            }
+
+            var probe = await Preview.AnalyzeAsync(clip, keyboard, ct);
+            ct.ThrowIfCancellationRequested();
+
+            await InvokeAsync(() =>
+            {
+                _probe = probe;
+                _probeStats = probe.Evaluate(_threshold);
+                _probePhase = ProbePhase.Ready;
+                _probeVersion++;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var message = ex is PreviewException pe ? pe.Message : "Le test a échoué. Réessayez dans un instant.";
+            try
+            {
+                await InvokeAsync(() =>
+                {
+                    _probePhase = ProbePhase.Failed;
+                    _probeError = message;
+                    _probe = null;
+                    _probeStats = null;
+                    _probeVersion++;
+                    StateHasChanged();
+                });
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
+
+    private async Task RedrawProbeAsync()
+    {
+        if (_probe is null)
+        {
+            return;
+        }
+
+        _probeStats = _probe.Evaluate(_threshold);
+        try
+        {
+            await JS.InvokeVoidAsync("s2mUi.probe.update", _threshold, _separateHands);
+        }
+        catch (JSException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private async Task SetHands(bool separate)
+    {
+        _separateHands = separate;
+        await RedrawProbeAsync();
+    }
+
+    private async Task SyncProbeCanvasAsync()
+    {
+        if (!_probeActive || _probeCanvas.Id is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_probeVersion != _probeSentVersion)
+            {
+                _probeSentVersion = _probeVersion;
+                _probeCanvasId = _probeCanvas.Id;
+                if (_probe is null)
+                {
+                    await JS.InvokeVoidAsync("s2mUi.probe.attach", _probeCanvas);
+                    await JS.InvokeVoidAsync("s2mUi.probe.clear");
+                }
+                else
+                {
+                    await JS.InvokeVoidAsync("s2mUi.probe.load", _probeCanvas, _probe.Frames, _probe.KeyCount,
+                        _probe.IsWhite, _probe.Diffs, _probe.Hands, _threshold, _separateHands);
+                }
+            }
+            else if (_probeCanvas.Id != _probeCanvasId)
+            {
+                _probeCanvasId = _probeCanvas.Id;
+                await JS.InvokeVoidAsync("s2mUi.probe.attach", _probeCanvas);
+            }
+        }
+        catch (JSException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private static string Fmt1(double value) =>
+        value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture).Replace('.', ',');
+
+    private (string Kind, string Icon, string Text) ProbeVerdict
+    {
+        get
+        {
+            var s = _probeStats!;
+            var keys = _probe?.KeyCount ?? 88;
+            if (s.Notes == 0)
+            {
+                return ("is-bad", "alert",
+                    "Aucune note sur cet extrait. Si on entend jouer à ce moment-là, baissez le seuil. " +
+                    "Si rien ne s'allume même au plus bas, la vidéo n'éclaire sans doute pas les touches jouées : elle ne pourra pas être convertie.");
+            }
+            if (s.PerSecond > 15 || (s.Notes >= 20 && s.ShortShare > 0.4))
+            {
+                return ("is-bad", "alert",
+                    "Beaucoup de notes très brèves : le seuil capte sans doute des effets lumineux ou du scintillement. Montez-le jusqu'à voir des barres nettes.");
+            }
+            if (s.KeysUsed > keys * 0.6)
+            {
+                return ("is-warn", "alert",
+                    "Presque tout le clavier s'allume : la ligne passe peut-être dans une zone traversée par les notes qui tombent. Montez le seuil, ou descendez la ligne vers le bas des touches noires.");
+            }
+            if (s.ShortShare > 0.2)
+            {
+                return ("is-warn", "alert",
+                    "Une partie des notes sont très brèves. Si elles ressemblent à du bruit sur le rouleau, montez un peu le seuil.");
+            }
+            return ("is-ok", "check", "Résultat plausible : des notes nettes, à un rythme jouable.");
+        }
+    }
+
+    private RenderFragment ProbePanel => __builder =>
+    {
+        var from = _probeClip?.StartSeconds ?? 0;
+        <section class="s2m-probe" aria-labelledby="probe-title">
+            <div class="s2m-probe-head">
+                <h2 class="s2m-probe-title" id="probe-title">Test du seuil</h2>
+                @if (_probeActive && _probeClip is not null)
+                {
+                    <span class="s2m-probe-aside">Extrait @UiFormat.Time(from) → @UiFormat.Time(from + ThresholdPreviewService.ExtractSeconds)</span>
+                }
+            </div>
+
+            @if (!_probeActive)
+            {
+                <p class="s2m-field-hint">Lit 10 secondes à partir du début et montre les notes que la conversion trouverait avec ces réglages. Ensuite, le seuil, la ligne du clavier et le début se règlent en voyant le résultat.</p>
+                <div class="s2m-row">
+                    <button type="button" class="s2m-btn s2m-btn-secondary s2m-btn-sm" @onclick="StartProbe" disabled="@(TimeError is not null)">
+                        <Icon Name="piano" Size="18" /><span class="s2m-btn-label">Tester sur un extrait</span>
+                    </button>
+                </div>
+            }
+            else
+            {
+                <div class="s2m-probe-roll">
+                    <canvas class="s2m-probe-canvas" @ref="_probeCanvas" role="img"
+                            aria-label="@(_probeStats is null ? "Rouleau de notes de l'extrait" : $"Rouleau de notes de l'extrait : {_probeStats.Notes} notes")"></canvas>
+                    @if (ProbeBusy)
+                    {
+                        <div class="s2m-probe-busy" role="status">
+                            <Icon Name="spinner" Size="18" />
+                            <span>@(_probePhase == ProbePhase.Fetching ? "Récupération de l'extrait… une dizaine de secondes" : "Lecture du clavier…")</span>
+                        </div>
+                    }
+                </div>
+                <div class="s2m-probe-axis" aria-hidden="true">
+                    <span>@UiFormat.Time(from)</span><span>@UiFormat.Time(from + ThresholdPreviewService.ExtractSeconds)</span>
+                </div>
+
+                @if (_probePhase == ProbePhase.Failed && _probeError is not null)
+                {
+                    <p class="s2m-field-error" role="alert"><Icon Name="alert" Size="16" /><span>@_probeError</span></p>
+                }
+                else if (_probe is not null && _probeStats is not null)
+                {
+                    var verdict = ProbeVerdict;
+                    <dl class="s2m-probe-stats">
+                        <div class="s2m-probe-stat"><dt>Notes</dt><dd>@_probeStats.Notes</dd></div>
+                        <div class="s2m-probe-stat"><dt>Par seconde</dt><dd>@Fmt1(_probeStats.PerSecond)</dd></div>
+                        <div class="s2m-probe-stat"><dt>Touches reconnues</dt><dd>@_probe.KeyCount</dd></div>
+                    </dl>
+                    <p class="s2m-probe-verdict @verdict.Kind" role="status"><Icon Name="@verdict.Icon" Size="16" /><span>@verdict.Text</span></p>
+                    @if (_separateHands)
+                    {
+                        <div class="s2m-probe-legend">
+                            <span><i style="background: var(--hand-right)"></i>Main droite</span>
+                            <span><i style="background: var(--hand-left)"></i>Main gauche</span>
+                        </div>
+                    }
+                }
+
+                <p class="s2m-field-hint">Chaque barre est une note telle que la conversion la lirait : des barres nettes sont de vraies notes, une pluie de petits traits est du bruit. Le seuil se met à jour en direct ; la ligne du clavier et le début relancent la lecture.</p>
+            }
+        </section>
+    };
+
+    public void Dispose()
+    {
+        _probeCts?.Cancel();
+        _selfRef?.Dispose();
+    }
+}

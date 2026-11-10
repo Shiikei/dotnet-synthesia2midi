@@ -1,0 +1,136 @@
+@page "/historique"
+@rendermode InteractiveServer
+@inject AppDbContext Db
+
+<PageTitle>Historique · syn2mid</PageTitle>
+
+<h1 class="s2m-page-title">Historique</h1>
+
+@if (_conversions is null)
+{
+    <p class="s2m-meta">Chargement…</p>
+}
+else if (_conversions.Count == 0)
+{
+    <div class="s2m-hempty">
+        <Icon Name="note" Size="28" />
+        <p class="s2m-hempty-title">Aucune conversion pour l'instant</p>
+        <p class="s2m-hempty-text">Les partitions que vous créez apparaîtront ici.</p>
+        <a class="s2m-btn s2m-btn-primary s2m-btn-md" href="nouvelle">
+            <Icon Name="plus" Size="18" /><span class="s2m-btn-label">Nouvelle conversion</span>
+        </a>
+    </div>
+}
+else
+{
+    <ul class="s2m-hlist" aria-label="Conversions passées">
+        @foreach (var c in _conversions)
+        {
+            var confirming = _confirming == c.Id;
+            var busy = InProgress(c);
+            var title = string.IsNullOrWhiteSpace(c.Title) ? "Sans titre" : c.Title;
+            <li class="s2m-hrow @(confirming ? "is-confirming" : null)" @key="c.Id">
+                <StatusBadge Status="c.Status" />
+                <div class="s2m-hrow-main">
+                    <a class="s2m-hrow-title" href="conversions/@c.Id">@title</a>
+                    <span class="s2m-hrow-meta">
+                        <time datetime="@UiFormat.IsoDate(c.CreatedAt)">@UiFormat.Date(c.CreatedAt)</time>@Detail(c)
+                    </span>
+                </div>
+                <div class="s2m-hrow-actions">
+                    @if (confirming)
+                    {
+                        <button type="button" class="s2m-btn s2m-btn-ghost s2m-btn-sm" @onclick="() => _confirming = null">
+                            <span class="s2m-btn-label">Annuler</span>
+                        </button>
+                        <button type="button" class="s2m-btn s2m-btn-danger s2m-btn-sm" disabled="@_deleting" @onclick="() => DeleteAsync(c)">
+                            <Icon Name="trash" Size="18" /><span class="s2m-btn-label">Supprimer</span>
+                        </button>
+                    }
+                    else
+                    {
+                        <a class="s2m-btn s2m-btn-ghost s2m-btn-sm" href="conversions/@c.Id">
+                            <span class="s2m-btn-label">Voir le détail</span><Icon Name="chevronRight" Size="18" />
+                        </a>
+                        <button type="button" class="s2m-btn s2m-btn-ghost-danger s2m-btn-sm s2m-btn-icononly"
+                                disabled="@busy"
+                                title="@(busy ? "Impossible de supprimer une conversion en cours" : "Supprimer")"
+                                aria-label="Supprimer « @title »"
+                                @onclick="() => _confirming = c.Id">
+                            <Icon Name="trash" Size="18" />
+                        </button>
+                    }
+                </div>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    private List<Conversion>? _conversions;
+    private Guid? _confirming;
+    private bool _deleting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _conversions = await Db.Conversions
+            .OrderByDescending(c => c.CreatedAt)
+            .ToListAsync();
+    }
+
+    private static bool InProgress(Conversion c) =>
+        c.Status is not (ConversionStatus.Completed or ConversionStatus.Failed);
+
+    // « · Clavier 75 % · seuil 30 » à la suite de la date.
+    private static string? Detail(Conversion c)
+    {
+        try
+        {
+            var s = System.Text.Json.JsonSerializer.Deserialize<ConversionSettings>(c.SettingsJson);
+            return s is null ? null : $" · Clavier {UiFormat.Percent(s.KeyboardHeight * 100)} · seuil {s.Threshold}";
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    private async Task DeleteAsync(Conversion conversion)
+    {
+        if (_deleting)
+        {
+            return;
+        }
+        _deleting = true;
+
+        try
+        {
+            // Rien n'est stocké en base à part les métadonnées : les fichiers réels vivent dans
+            // /data/conversions/{id}. Suppression best-effort avant de retirer l'enregistrement —
+            // une conversion en échec très tôt peut ne pas avoir de dossier, et un fichier
+            // verrouillé ne doit pas empêcher la suppression de l'historique.
+            var dataDir = Environment.GetEnvironmentVariable("DATA_DIR") ?? "/data";
+            var workDir = Path.Combine(dataDir, "conversions", conversion.Id.ToString());
+            if (Directory.Exists(workDir))
+            {
+                try
+                {
+                    Directory.Delete(workDir, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
+            }
+
+            Db.Conversions.Remove(conversion);
+            await Db.SaveChangesAsync();
+
+            _conversions?.Remove(conversion);
+            _confirming = null;
+        }
+        finally
+        {
+            _deleting = false;
+        }
+    }
+}

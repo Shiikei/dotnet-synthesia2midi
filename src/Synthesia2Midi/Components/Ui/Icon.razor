@@ -1,0 +1,50 @@
+@* Jeu d'icônes maison du design system syn2mid : trait de 1,75 px, grille de 24,
+   dessiné en currentColor ; icônes de transport pleines. *@
+<svg class="s2m-icon @(Def.Spin ? "s2m-spin" : null) @Class" width="@Size" height="@Size" viewBox="0 0 24 24"
+     fill="@(Def.Fill ? "currentColor" : "none")" stroke="@(Def.Fill ? "none" : "currentColor")"
+     stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"
+     aria-hidden="@(Label is null ? "true" : null)" role="@(Label is null ? null : "img")" aria-label="@Label" focusable="false">
+    @foreach (var d in Def.Paths)
+    {
+        <path d="@d" />
+    }
+</svg>
+
+@code {
+    [Parameter] public string Name { get; set; } = "note";
+    [Parameter] public int Size { get; set; } = 20;
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? Class { get; set; }
+
+    private IconDef Def => Icons.TryGetValue(Name, out var d) ? d : Icons["note"];
+
+    private sealed record IconDef(string[] Paths, bool Fill = false, bool Spin = false);
+
+    private static readonly Dictionary<string, IconDef> Icons = new()
+    {
+        ["play"] = new(new[] { "M7 4.8v14.4a.6.6 0 0 0 .9.5l11.3-7.2a.6.6 0 0 0 0-1L7.9 4.3a.6.6 0 0 0-.9.5z" }, Fill: true),
+        ["pause"] = new(new[] { "M6.5 4.5h3.5v15H6.5z", "M14 4.5h3.5v15H14z" }, Fill: true),
+        ["stop"] = new(new[] { "M5.5 5.5h13v13h-13z" }, Fill: true),
+        ["download"] = new(new[] { "M12 4v11", "M7 10.5l5 5 5-5", "M5 20h14" }),
+        ["trash"] = new(new[] { "M4 7h16", "M9.5 7V4.5h5V7", "M6.5 7l.9 12.5h9.2L17.5 7", "M10 11v5", "M14 11v5" }),
+        ["link"] = new(new[] { "M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1", "M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" }),
+        ["check"] = new(new[] { "M5 12.5l4.5 4.5L19 7.5" }),
+        ["x"] = new(new[] { "M6.5 6.5l11 11", "M17.5 6.5l-11 11" }),
+        ["clock"] = new(new[] { "M12 3.5a8.5 8.5 0 1 0 0 17a8.5 8.5 0 1 0 0-17z", "M12 7.5V12l3 2" }),
+        ["alert"] = new(new[] { "M12 8.5v4.5", "M12 16.5v.01", "M10.3 4.2 2.9 17.3A2 2 0 0 0 4.6 20.3h14.8a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z" }),
+        ["arrowRight"] = new(new[] { "M5 12h14", "M13 6l6 6-6 6" }),
+        ["chevronRight"] = new(new[] { "M9.5 6l6 6-6 6" }),
+        ["chevronLeft"] = new(new[] { "M14.5 6l-6 6 6 6" }),
+        ["sun"] = new(new[] { "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8z", "M12 2.5v2", "M12 19.5v2", "M4.6 4.6l1.4 1.4", "M18 18l1.4 1.4", "M2.5 12h2", "M19.5 12h2", "M4.6 19.4 6 18", "M18 6l1.4-1.4" }),
+        ["moon"] = new(new[] { "M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z" }),
+        ["monitor"] = new(new[] { "M3.5 5.5h17v11h-17z", "M9 20h6", "M12 16.5V20" }),
+        ["plus"] = new(new[] { "M12 5v14", "M5 12h14" }),
+        ["video"] = new(new[] { "M3.5 7A2.5 2.5 0 0 1 6 4.5h12A2.5 2.5 0 0 1 20.5 7v10a2.5 2.5 0 0 1-2.5 2.5H6A2.5 2.5 0 0 1 3.5 17z", "M10 9v6l5-3z" }),
+        ["note"] = new(new[] { "M9 18V5.5l11-2V16", "M9 18a3 3 0 1 1-6 0a3 3 0 1 1 6 0z", "M20 16a3 3 0 1 1-6 0a3 3 0 1 1 6 0z" }),
+        ["score"] = new(new[] { "M5 3.5h10l4 4v13H5z", "M15 3.5v4h4", "M8 11h8", "M8 14h8", "M8 17h5" }),
+        ["piano"] = new(new[] { "M3.5 5h17v14h-17z", "M9 19v-5.5", "M15 19v-5.5", "M7.5 5v8.5h3V5", "M13.5 5v8.5h3V5" }),
+        ["history"] = new(new[] { "M4.5 12a7.5 7.5 0 1 0 2.2-5.3", "M4.5 4.5v3.5H8", "M12 8v4l3 2" }),
+        ["hand"] = new(new[] { "M8 13V5.5a1.5 1.5 0 0 1 3 0V11", "M11 10.5V4a1.5 1.5 0 0 1 3 0v6.5", "M14 10.5V5.5a1.5 1.5 0 0 1 3 0V14a6 6 0 0 1-6 6h-.5a6 6 0 0 1-4.6-2.2L3.6 15a1.5 1.5 0 0 1 2.2-2l2.2 1.8" }),
+        ["spinner"] = new(new[] { "M12 3.5a8.5 8.5 0 1 0 8.5 8.5" }, Spin: true),
+    };
+}

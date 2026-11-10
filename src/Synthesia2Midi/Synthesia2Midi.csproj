@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>Synthesia2Midi</RootNamespace>
+    <UserSecretsId>synthesia2midi-dev</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Versions à confirmer via `dotnet restore` / NuGet.org : je n'ai pas d'accès
+         réseau depuis ce bac à sable pour vérifier les toutes dernières versions. -->
+    <PackageReference Include="Melanchall.DryWetMidi" Version="7.2.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <!-- Client SignalR : nécessaire côté serveur uniquement parce que ConversionDetail.razor
+         ouvre sa propre connexion HubConnection vers ConversionProgressHub (brief §"Cible"
+         point 1). Absent du framework partagé ASP.NET Core, contrairement au serveur SignalR. -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

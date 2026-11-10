@@ -1,0 +1,9 @@
+@* Statut d'une conversion : toujours une icône et un mot, jamais la couleur seule. *@
+<span class="s2m-badge s2m-badge-@UiFormat.StatusKind(Status)">
+    <Icon Name="@UiFormat.StatusIcon(Status)" Size="14" />
+    <span>@UiFormat.StatusLabel(Status)</span>
+</span>
+
+@code {
+    [Parameter] public ConversionStatus Status { get; set; }
+}

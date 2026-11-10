@@ -1,0 +1,11 @@
+bin/
+obj/
+data/*
+!data/.gitkeep
+certs/*
+!certs/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+.vs/
+.vscode/

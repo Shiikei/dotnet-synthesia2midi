@@ -1,0 +1,9 @@
+@page "/"
+@inject NavigationManager Nav
+
+@* L'application n'a que trois vues : l'accueil mène directement à la nouvelle conversion. *@
+<PageTitle>syn2mid</PageTitle>
+
+@code {
+    protected override void OnInitialized() => Nav.NavigateTo("nouvelle", replace: true);
+}

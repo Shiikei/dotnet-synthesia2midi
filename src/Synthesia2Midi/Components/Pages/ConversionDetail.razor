@@ -1,0 +1,606 @@
+@page "/conversions/{ConversionId:guid}"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ConversionProgressNotifier Notifier
+@using System.Net.WebSockets
+
+<PageTitle>@(_conversion?.Title ?? "Conversion") · syn2mid</PageTitle>
+
+@if (_conversion is null)
+{
+    <p class="s2m-meta">Chargement…</p>
+}
+else
+{
+    <header class="s2m-detail-head">
+        <div class="s2m-page-head">
+            <h1 class="s2m-page-title is-title">@_conversion.Title</h1>
+            <StatusBadge Status="_status" />
+        </div>
+        <p class="s2m-meta">
+            <time datetime="@UiFormat.IsoDate(_conversion.CreatedAt)">@UiFormat.Date(_conversion.CreatedAt)</time>
+            @if (!string.IsNullOrWhiteSpace(_conversion.SourceUrl))
+            {
+                <text> · </text><a href="@_conversion.SourceUrl" target="_blank" rel="noopener">Voir la vidéo source</a>
+            }
+            @if (SettingsLine is not null)
+            {
+                <text> · @SettingsLine</text>
+            }
+        </p>
+        @if (_status is ConversionStatus.Completed or ConversionStatus.Failed)
+        {
+            <div class="s2m-row">
+                <a class="s2m-btn s2m-btn-secondary s2m-btn-sm" href="nouvelle?depuis=@ConversionId">
+                    <Icon Name="history" Size="18" /><span class="s2m-btn-label">Refaire la conversion</span>
+                </a>
+            </div>
+        }
+    </header>
+
+    @if (ShowSteps)
+    {
+        <section class="s2m-steps" aria-label="Progression de la conversion">
+            <div class="s2m-steps-head">
+                <span class="s2m-steps-title">Progression</span>
+                <span class="s2m-steps-sum" aria-live="polite">@StepSummary</span>
+            </div>
+            <ol class="s2m-steps-list">
+                @foreach (var step in Steps)
+                {
+                    <li class="s2m-step is-@step.State" aria-current="@(step.State == "running" ? "step" : null)">
+                        <span class="s2m-step-mark" aria-hidden="true">
+                            @if (step.State == "done")
+                            {
+                                <Icon Name="check" Size="14" />
+                            }
+                            else if (step.State == "failed")
+                            {
+                                <Icon Name="x" Size="14" />
+                            }
+                            else if (step.State == "running")
+                            {
+                                <i class="s2m-step-pulse"></i>
+                            }
+                        </span>
+                        <div class="s2m-step-body">
+                            <div class="s2m-step-row">
+                                <span class="s2m-step-label">@step.Label</span>
+                                <span class="s2m-step-meta is-mono">@step.Meta</span>
+                            </div>
+                            @if (step.State == "running")
+                            {
+                                <div class="s2m-step-bar" role="progressbar" aria-valuenow="@Math.Round(_percent)" aria-valuemin="0" aria-valuemax="100" aria-label="Progression totale">
+                                    <i style="width: @UiFormat.Inv(Math.Clamp(_percent, 0, 100))%"></i>
+                                </div>
+                            }
+                            @if (step.Detail is not null)
+                            {
+                                <p class="s2m-step-detail">@step.Detail</p>
+                            }
+                        </div>
+                    </li>
+                }
+            </ol>
+        </section>
+    }
+
+    @if (_status == ConversionStatus.Failed)
+    {
+        <div class="s2m-alert" role="alert">
+            <Icon Name="alert" Size="20" />
+            <div>
+                <p class="s2m-alert-title">La conversion a échoué</p>
+                <p class="s2m-alert-text">@(string.IsNullOrWhiteSpace(_conversion.ErrorMessage) ? "Aucune cause n'a été enregistrée." : _conversion.ErrorMessage)</p>
+                <p class="s2m-alert-text">Relancez-la en ajustant le début, la hauteur du clavier ou le seuil. <a href="nouvelle?depuis=@ConversionId">Refaire avec d'autres réglages</a></p>
+            </div>
+        </div>
+    }
+
+    @if (_conversion.CalibrationImagePath is not null)
+    {
+        <section class="s2m-calibration">
+            <h2 class="s2m-section-title">Image de calibration</h2>
+            <img src="@GetDownloadUrl("calibration")" alt="Image de calibration du clavier" />
+        </section>
+    }
+
+    @if (_status == ConversionStatus.Completed)
+    {
+        <div class="s2m-dls">
+            @foreach (var dl in Downloads)
+            {
+                if (dl.Href is not null)
+                {
+                    <a class="s2m-dl" href="@dl.Href" download="@dl.FileName">
+                        <span class="s2m-dl-ext is-mono">@dl.Ext</span>
+                        <span class="s2m-dl-text">
+                            <span class="s2m-dl-label">Télécharger @dl.Label</span>
+                            <span class="s2m-dl-hint">@dl.HintLine</span>
+                        </span>
+                        <Icon Name="download" Size="20" Class="s2m-dl-icon" />
+                    </a>
+                }
+                else
+                {
+                    <span class="s2m-dl is-disabled" aria-disabled="true">
+                        <span class="s2m-dl-ext is-mono">@dl.Ext</span>
+                        <span class="s2m-dl-text">
+                            <span class="s2m-dl-label">@dl.Label</span>
+                            <span class="s2m-dl-hint">Non produit pour cette conversion</span>
+                        </span>
+                    </span>
+                }
+            }
+        </div>
+
+        @if (_conversion.MidiFilePath is not null)
+        {
+            <div class="s2m-sequencer">
+                <button type="button" class="s2m-btn s2m-btn-secondary s2m-btn-sm"
+                        data-href="@GetDownloadUrl("midi")" data-name="@($"{UiFormat.SafeFileName(_conversion.Title)}.mid")"
+                        onclick="s2mUi.openInSequencer(this.dataset.href, this.dataset.name)">
+                    <Icon Name="note" Size="18" /><span class="s2m-btn-label">Ouvrir dans Online Sequencer</span><Icon Name="arrowRight" Size="18" />
+                </button>
+                <p class="s2m-field-hint">Télécharge le MIDI et ouvre Online Sequencer dans un nouvel onglet. Là-bas, ouvrez le menu, choisissez « Import MIDI/Sequence File », puis le fichier que vous venez de télécharger.</p>
+            </div>
+        }
+
+        @if (_conversion.MusicXmlFilePath is not null)
+        {
+            <section class="s2m-score" aria-label="Partition : @_conversion.Title">
+                <div class="s2m-score-toolbar">
+                    <div class="s2m-transport" role="group" aria-label="Lecture de la partition">
+                        <div class="s2m-transport-btns">
+                            <button type="button" class="s2m-btn @(_play == "playing" ? "s2m-btn-secondary" : "s2m-btn-primary") s2m-btn-sm"
+                                    disabled="@(_play == "playing" || !_scoreReady)" aria-pressed="@(_play == "playing" ? "true" : "false")"
+                                    @onclick="PlayScore">
+                                <Icon Name="play" Size="18" /><span class="s2m-btn-label">Lecture</span>
+                            </button>
+                            <button type="button" class="s2m-btn s2m-btn-secondary s2m-btn-sm" disabled="@(_play != "playing")" @onclick="PauseScore">
+                                <Icon Name="pause" Size="18" /><span class="s2m-btn-label">Pause</span>
+                            </button>
+                            <button type="button" class="s2m-btn s2m-btn-secondary s2m-btn-sm" disabled="@(_play == "stopped")" @onclick="StopScore">
+                                <Icon Name="stop" Size="18" /><span class="s2m-btn-label">Stop</span>
+                            </button>
+                        </div>
+                        <div class="s2m-transport-time">
+                            <div class="s2m-transport-bar" aria-hidden="true"><i style="width: @UiFormat.Inv(PlaybackPct)%"></i></div>
+                            <span class="is-mono">@UiFormat.Time(_position)<span class="s2m-transport-dur"> / @UiFormat.Time(_duration)</span></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="s2m-score-paper">
+                    <header class="s2m-score-head">
+                        <h2 class="s2m-score-title">@_conversion.Title</h2>
+                        @if (_scoreSubtitle is not null)
+                        {
+                            <p class="s2m-score-sub">@_scoreSubtitle</p>
+                        }
+                    </header>
+                    <div class="s2m-score-body">
+                        @if (_scoreError)
+                        {
+                            <p class="s2m-score-note">La partition n'a pas pu être affichée ici. Téléchargez le MusicXML ou le PDF.</p>
+                        }
+                        else if (!_scoreReady)
+                        {
+                            <p class="s2m-score-note">Gravure de la partition…</p>
+                        }
+                        <div id="@ScoreContainer"></div>
+                    </div>
+                </div>
+            </section>
+        }
+        else
+        {
+            <p class="s2m-meta">La partition n'a pas pu être gravée pour cette conversion. Le fichier MIDI reste disponible.</p>
+        }
+    }
+}
+
+@code {
+    [Parameter] public Guid ConversionId { get; set; }
+
+    private const string ScoreContainer = "osmd-container";
+
+    private static readonly ConversionStatus[] StepOrder =
+    {
+        ConversionStatus.Downloading,
+        ConversionStatus.Analyzing,
+        ConversionStatus.WritingMidi,
+        ConversionStatus.RenderingSheetMusic,
+    };
+
+    private Conversion? _conversion;
+    private ConversionStatus _status;
+    private ConversionStatus? _failedAt;
+    private double _percent;
+    private string? _message;
+
+    private bool _scoreRequested;
+    private bool _scoreReady;
+    private bool _scoreError;
+    private string? _scoreSubtitle;
+
+    private string _play = "stopped";
+    private double _position;
+    private double _duration;
+    private CancellationTokenSource? _pollCts;
+
+    private sealed record StepView(string Label, string State, string Meta, string? Detail);
+    private sealed record DownloadView(string Ext, string Label, string Hint, string? Href, string? Size, string FileName)
+    {
+        public string HintLine => Size is null ? Hint : $"{Size} · {Hint}";
+    }
+
+    public sealed class ScoreInfo
+    {
+        public double? Bpm { get; set; }
+        public string? TimeSignature { get; set; }
+        public double Duration { get; set; }
+    }
+
+    public sealed class PlayerStatus
+    {
+        public string? State { get; set; }
+        public double Position { get; set; }
+        public double Duration { get; set; }
+    }
+
+    private int CurrentStepIndex => _status == ConversionStatus.Failed
+        ? (_failedAt is ConversionStatus f ? Array.IndexOf(StepOrder, f) : -1)
+        : Array.IndexOf(StepOrder, _status);
+
+    // Étapes affichées pendant la conversion. Après un échec, seulement si l'on sait à
+    // quelle étape il s'est produit (transition vue en direct).
+    private bool ShowSteps => _status switch
+    {
+        ConversionStatus.Completed => false,
+        ConversionStatus.Failed => CurrentStepIndex >= 0,
+        _ => true,
+    };
+
+    private IEnumerable<StepView> Steps
+    {
+        get
+        {
+            var labels = new[]
+            {
+                string.IsNullOrWhiteSpace(_conversion?.SourceUrl) ? "Lecture de la vidéo" : "Téléchargement de la vidéo",
+                "Détection des notes",
+                "Écriture du MIDI",
+                "Gravure de la partition",
+            };
+            var current = CurrentStepIndex;
+            for (var i = 0; i < labels.Length; i++)
+            {
+                var state = _status switch
+                {
+                    ConversionStatus.Pending => "pending",
+                    _ when i < current => "done",
+                    _ when i == current => _status == ConversionStatus.Failed ? "failed" : "running",
+                    _ => "pending",
+                };
+                var meta = state switch
+                {
+                    "running" => UiFormat.Percent(_percent),
+                    "failed" => "Échec",
+                    _ => string.Empty,
+                };
+                var detail = state == "running" && !string.IsNullOrWhiteSpace(_message) ? _message : null;
+                yield return new StepView(labels[i], state, meta, detail);
+            }
+        }
+    }
+
+    private string StepSummary => _status switch
+    {
+        ConversionStatus.Pending => "En attente de démarrage",
+        ConversionStatus.Failed => $"Échec à l'étape {CurrentStepIndex + 1} sur {StepOrder.Length}",
+        _ => $"Étape {CurrentStepIndex + 1} sur {StepOrder.Length}",
+    };
+
+    private string? SettingsLine
+    {
+        get
+        {
+            try
+            {
+                var s = System.Text.Json.JsonSerializer.Deserialize<ConversionSettings>(_conversion?.SettingsJson ?? "{}");
+                if (s is null)
+                {
+                    return null;
+                }
+                var parts = new List<string> { $"Clavier {UiFormat.Percent(s.KeyboardHeight * 100)}", $"seuil {s.Threshold}" };
+                if (s.Start is not null || s.End is not null)
+                {
+                    var from = s.Start is TimeSpan a ? UiFormat.Time(a.TotalSeconds) : "00:00";
+                    var to = s.End is TimeSpan b ? UiFormat.Time(b.TotalSeconds) : "fin";
+                    parts.Add($"{from} → {to}");
+                }
+                return string.Join(" · ", parts);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return null;
+            }
+        }
+    }
+
+    private IEnumerable<DownloadView> Downloads
+    {
+        get
+        {
+            var name = UiFormat.SafeFileName(_conversion?.Title);
+            yield return Download(".mid", "MIDI", "Pour Synthesia, un DAW ou un clavier", "midi", _conversion?.MidiFilePath, name);
+            yield return Download(".musicxml", "MusicXML", "Pour MuseScore, Sibelius, Dorico", "musicxml", _conversion?.MusicXmlFilePath, name);
+            yield return Download(".pdf", "PDF", "Partition à imprimer", "pdf", _conversion?.PdfFilePath, name);
+        }
+    }
+
+    private DownloadView Download(string ext, string label, string hint, string kind, string? path, string baseName)
+    {
+        string? size = null;
+        if (path is not null)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Exists)
+                {
+                    size = UiFormat.FileSize(info.Length);
+                }
+            }
+            catch (Exception)
+            {
+            }
+        }
+        return new DownloadView(ext, label, hint, path is null ? null : GetDownloadUrl(kind), size, baseName + ext);
+    }
+
+    private double PlaybackPct => _duration > 0 ? Math.Clamp(_position / _duration * 100, 0, 100) : 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _conversion = await Db.Conversions.FindAsync(ConversionId);
+        if (_conversion is null)
+        {
+            Nav.NavigateTo("/historique");
+            return;
+        }
+        _status = _conversion.Status;
+        _percent = _status == ConversionStatus.Completed ? 100 : 0;
+
+        Notifier.ProgressUpdated += OnProgressAsync;
+
+        // Une étape a pu se terminer entre la lecture initiale et l'abonnement.
+        await Db.Entry(_conversion).ReloadAsync();
+        _status = _conversion.Status;
+        _percent = _status == ConversionStatus.Completed ? 100 : _percent;
+    }
+
+    private async Task OnProgressAsync(ConversionProgress progress)
+    {
+            if (progress.ConversionId != ConversionId)
+            {
+                return;
+            }
+
+            await InvokeAsync(async () =>
+            {
+                // Mémoriser l'étape où l'échec s'est produit, pour l'afficher dans la progression.
+                if (progress.Status == ConversionStatus.Failed && _status != ConversionStatus.Failed)
+                {
+                    _failedAt = _status;
+                }
+
+                _status = progress.Status;
+                _percent = progress.PercentComplete;
+                _message = progress.Message;
+
+                // Le DbContext est scoped au circuit Blazor Server (durée de vie longue) : sans
+                // ce ReloadAsync, _conversion garde les valeurs chargées à l'ouverture de la page
+                // (MidiFilePath/MusicXmlFilePath/PdfFilePath toujours null) même après que le
+                // worker les a renseignées et sauvegardées côté base.
+                if (_conversion is not null)
+                {
+                    await Db.Entry(_conversion).ReloadAsync();
+                }
+
+                StateHasChanged();
+            });
+
+            await InvokeAsync(RenderSheetMusicIfReadyAsync);
+    }
+
+    private string GetDownloadUrl(string kind) => $"/api/conversions/{ConversionId}/{kind}";
+
+    private async Task RenderSheetMusicIfReadyAsync()
+    {
+        if (_scoreRequested || _status != ConversionStatus.Completed || _conversion?.MusicXmlFilePath is null)
+        {
+            return;
+        }
+        _scoreRequested = true;
+
+        try
+        {
+            var info = await JS.InvokeAsync<ScoreInfo?>("osmdInterop.render", ScoreContainer, GetDownloadUrl("musicxml"));
+            if (info is null)
+            {
+                // Conteneur pas encore dans le DOM : on réessaiera au prochain rendu.
+                _scoreRequested = false;
+                return;
+            }
+
+            _scoreReady = true;
+            _duration = info.Duration;
+            var parts = new List<string>();
+            if (info.Bpm is double bpm && bpm > 0)
+            {
+                parts.Add($"♩ = {Math.Round(bpm)}");
+            }
+            if (!string.IsNullOrWhiteSpace(info.TimeSignature))
+            {
+                parts.Add(info.TimeSignature);
+            }
+            _scoreSubtitle = parts.Count > 0 ? string.Join(" · ", parts) : null;
+        }
+        catch (JSException)
+        {
+            _scoreError = true;
+        }
+        catch (JSDisconnectedException)
+        {
+            return;
+        }
+        catch (TaskCanceledException)
+        {
+            _scoreError = true;
+        }
+
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Une conversion déjà terminée à l'ouverture de la page n'a pas de transition en direct :
+        // on grave la partition au premier rendu interactif (ou dès que le conteneur existe).
+        if (!_scoreRequested)
+        {
+            await RenderSheetMusicIfReadyAsync();
+        }
+    }
+
+    private async Task PlayScore()
+    {
+        await JS.InvokeVoidAsync("osmdInterop.play", ScoreContainer);
+        _play = "playing";
+        StartPolling();
+    }
+
+    private async Task PauseScore()
+    {
+        StopPolling();
+        await JS.InvokeVoidAsync("osmdInterop.pause", ScoreContainer);
+        await RefreshPlayerAsync();
+        _play = "paused";
+    }
+
+    private async Task StopScore()
+    {
+        StopPolling();
+        await JS.InvokeVoidAsync("osmdInterop.stop", ScoreContainer);
+        _play = "stopped";
+        _position = 0;
+    }
+
+    private void StartPolling()
+    {
+        StopPolling();
+        var cts = new CancellationTokenSource();
+        _pollCts = cts;
+        _ = PollPlayerAsync(cts.Token);
+    }
+
+    private void StopPolling()
+    {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        _pollCts = null;
+    }
+
+    // Suit la position de lecture pour la barre du transport, et repasse à « arrêté »
+    // quand le lecteur atteint la fin de la partition.
+    private async Task PollPlayerAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(400));
+        var ticks = 0;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                ticks++;
+                var keepGoing = true;
+                await InvokeAsync(async () =>
+                {
+                    var status = await JS.InvokeAsync<PlayerStatus?>("osmdInterop.status", ct, ScoreContainer);
+                    if (status is null)
+                    {
+                        return;
+                    }
+                    _position = status.Position;
+                    if (status.Duration > 0)
+                    {
+                        _duration = status.Duration;
+                    }
+                    var state = status.State?.ToUpperInvariant();
+                    // Le lecteur met un instant à démarrer : ignorer « STOPPED » juste après Lecture.
+                    if (state == "STOPPED" && ticks > 3)
+                    {
+                        _play = "stopped";
+                        _position = 0;
+                        keepGoing = false;
+                    }
+                    else if (state == "PAUSED")
+                    {
+                        _play = "paused";
+                        keepGoing = false;
+                    }
+                    StateHasChanged();
+                });
+                if (!keepGoing)
+                {
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (JSException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task RefreshPlayerAsync()
+    {
+        try
+        {
+            var status = await JS.InvokeAsync<PlayerStatus?>("osmdInterop.status", ScoreContainer);
+            if (status is not null)
+            {
+                _position = status.Position;
+            }
+        }
+        catch (JSException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        StopPolling();
+
+        // Couper le son si l'on quitte la page pendant la lecture.
+        try
+        {
+            await JS.InvokeVoidAsync("osmdInterop.dispose", ScoreContainer);
+        }
+        catch (Exception)
+        {
+        }
+
+        Notifier.ProgressUpdated -= OnProgressAsync;
+    }
+}
