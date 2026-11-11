@@ -5,6 +5,9 @@ window.osmdInterop = {
     _instances: {},
     _players: {},
     _durations: {},
+    _baseBpm: {},   // tempo écrit dans la partition
+    _wholes: {},    // durée totale en rondes
+    _speed: {},     // facteur de vitesse de lecture (1 = tempo écrit)
 
     // Rend la partition et renvoie { bpm, timeSignature, duration } pour l'en-tête de la
     // feuille et la barre de transport (null si le conteneur n'existe pas).
@@ -17,6 +20,8 @@ window.osmdInterop = {
         if (!this._instances[containerId]) {
             this._instances[containerId] = new opensheetmusicdisplay.OpenSheetMusicDisplay(container, {
                 autoResize: true,
+                // Notre MusicXML (MusicXmlScoreWriter) ne contient pas de ligatures : OSMD les calcule.
+                autoBeam: true,
                 backend: "svg",
                 // Le titre est déjà posé par la feuille (ScoreSheet) au-dessus de la gravure.
                 drawTitle: false,
@@ -63,7 +68,13 @@ window.osmdInterop = {
                     wholes += m.Duration.RealValue;
                 }
             }
-            const duration = bpm > 0 ? wholes * 4 * 60 / bpm : 0;
+            this._baseBpm[containerId] = bpm;
+            this._wholes[containerId] = wholes;
+            this._speed[containerId] = this._speed[containerId] || 1;
+            if (this._speed[containerId] !== 1) {
+                this._applyBpm(player, bpm * this._speed[containerId]);
+            }
+            const duration = bpm > 0 ? wholes * 4 * 60 / (bpm * this._speed[containerId]) : 0;
             this._durations[containerId] = duration;
 
             return { bpm: bpm > 0 ? Math.round(bpm) : null, timeSignature: sig, duration: duration };
@@ -85,6 +96,38 @@ window.osmdInterop = {
             position: total > 0 ? duration * Math.min(1, current / total) : 0,
             duration: duration,
         };
+    },
+
+    // Vitesse de lecture (facteur, ex. 1.25 = 25 % plus vite). Pendant la lecture, on met en
+    // pause, on change le tempo puis on reprend au même endroit : le lecteur ne recalcule pas
+    // toujours les notes déjà programmées. Renvoie { bpm, duration } pour la barre de transport.
+    setSpeed: function (containerId, factor) {
+        const player = this._players[containerId];
+        const base = this._baseBpm[containerId] || 0;
+        if (!player || !(base > 0) || !(factor > 0)) {
+            return null;
+        }
+        this._speed[containerId] = factor;
+        const bpm = base * factor;
+        const wasPlaying = player.state === "PLAYING";
+        if (wasPlaying) {
+            player.pause();
+        }
+        this._applyBpm(player, bpm);
+        if (wasPlaying) {
+            player.play();
+        }
+        const duration = (this._wholes[containerId] || 0) * 4 * 60 / bpm;
+        this._durations[containerId] = duration;
+        return { bpm: Math.round(bpm), duration: duration };
+    },
+
+    _applyBpm: function (player, bpm) {
+        if (typeof player.setBpm === "function") {
+            player.setBpm(bpm);
+        } else if (player.playbackSettings) {
+            player.playbackSettings.bpm = bpm;
+        }
     },
 
     play: function (containerId) {
@@ -114,5 +157,8 @@ window.osmdInterop = {
         delete this._players[containerId];
         delete this._instances[containerId];
         delete this._durations[containerId];
+        delete this._baseBpm[containerId];
+        delete this._wholes[containerId];
+        delete this._speed[containerId];
     },
 };

@@ -172,6 +172,28 @@ else
                             <span class="is-mono">@UiFormat.Time(_position)<span class="s2m-transport-dur"> / @UiFormat.Time(_duration)</span></span>
                         </div>
                     </div>
+                    @* Ligne dédiée sous le lecteur, largeurs fixes : rien ne bouge quand la valeur change. *@
+                    <div class="s2m-transport-speed" role="group" aria-label="Vitesse de lecture">
+                        <label for="play-speed">Vitesse</label>
+                        <div class="s2m-slider" style="--s2m-pct: @UiFormat.Inv(SliderSpeedPct)%">
+                            <input id="play-speed" type="range" min="@SpeedSliderMin" max="@SpeedSliderMax" step="5"
+                                   value="@UiFormat.Inv(Math.Clamp(_speed, SpeedSliderMin, SpeedSliderMax))"
+                                   disabled="@(!SpeedEnabled)" @oninput="OnSpeedSliderInput" aria-valuetext="@SpeedText" />
+                        </div>
+                        <button type="button" class="s2m-speed-value is-mono" disabled="@(!SpeedEnabled)"
+                                title="Revenir au tempo de la partition" @onclick="ResetSpeedAsync">@SpeedPercentText</button>
+                        <label class="s2m-speed-bpm" for="play-bpm">
+                            <span aria-hidden="true">♩ =</span>
+                            <span class="s2m-input s2m-input-sm">
+                                <input id="play-bpm" class="is-mono" type="number" inputmode="numeric" min="@BpmMin" max="@BpmMax" step="1"
+                                       value="@(PlaybackBpm?.ToString(System.Globalization.CultureInfo.InvariantCulture))"
+                                       disabled="@(!SpeedEnabled)" aria-label="Tempo de lecture (noires par minute)"
+                                       @onchange="OnBpmChange" />
+                            </span>
+                        </label>
+                        <button type="button" class="s2m-btn s2m-btn-secondary s2m-btn-sm" disabled="@(!SpeedEnabled || Math.Abs(_speed - 100) < 0.01)"
+                                @onclick="ResetSpeedAsync">Réinitialiser</button>
+                    </div>
                 </div>
                 <div class="s2m-score-paper">
                     <header class="s2m-score-head">
@@ -227,6 +249,20 @@ else
     private string? _scoreSubtitle;
 
     private string _play = "stopped";
+
+    // Vitesse de lecture du lecteur intégré, en % du tempo écrit (ne change ni le MIDI ni la partition).
+    // Le curseur couvre 25–300 % ; le champ « ♩ = » accepte un tempo libre entre BpmMin et BpmMax.
+    private const int SpeedSliderMin = 25;
+    private const int SpeedSliderMax = 300;
+    private const int BpmMin = 10;
+    private const int BpmMax = 400;
+    private double _speed = 100;
+    private double? _baseBpm;
+    private bool SpeedEnabled => _scoreReady && _baseBpm is > 0;
+    private int? PlaybackBpm => _baseBpm is double b ? (int)Math.Round(b * _speed / 100.0) : null;
+    private string SpeedPercentText => $"{Math.Round(_speed).ToString(System.Globalization.CultureInfo.InvariantCulture)} %";
+    private double SliderSpeedPct => (Math.Clamp(_speed, SpeedSliderMin, SpeedSliderMax) - SpeedSliderMin) * 100.0 / (SpeedSliderMax - SpeedSliderMin);
+    private string SpeedText => PlaybackBpm is int bpm ? $"{SpeedPercentText}, noire = {bpm}" : SpeedPercentText;
     private double _position;
     private double _duration;
     private CancellationTokenSource? _pollCts;
@@ -241,6 +277,12 @@ else
     {
         public double? Bpm { get; set; }
         public string? TimeSignature { get; set; }
+        public double Duration { get; set; }
+    }
+
+    public sealed class SpeedInfo
+    {
+        public double Bpm { get; set; }
         public double Duration { get; set; }
     }
 
@@ -442,6 +484,7 @@ else
             var parts = new List<string>();
             if (info.Bpm is double bpm && bpm > 0)
             {
+                _baseBpm = bpm;
                 parts.Add($"♩ = {Math.Round(bpm)}");
             }
             if (!string.IsNullOrWhiteSpace(info.TimeSignature))
@@ -473,6 +516,56 @@ else
         if (!_scoreRequested)
         {
             await RenderSheetMusicIfReadyAsync();
+        }
+    }
+
+    private async Task OnSpeedSliderInput(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            await SetSpeedAsync(value);
+        }
+    }
+
+    // Tempo libre tapé dans le champ « ♩ = » (validé à Entrée ou en quittant le champ).
+    private async Task OnBpmChange(ChangeEventArgs e)
+    {
+        if (_baseBpm is double baseBpm && baseBpm > 0
+            && double.TryParse(e.Value?.ToString()?.Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var bpm)
+            && bpm > 0)
+        {
+            await SetSpeedAsync(Math.Clamp(bpm, BpmMin, BpmMax) / baseBpm * 100.0);
+        }
+        else
+        {
+            StateHasChanged(); // valeur invalide : on réaffiche le tempo en cours
+        }
+    }
+
+    private Task ResetSpeedAsync() => SetSpeedAsync(100);
+
+    private async Task SetSpeedAsync(double percent)
+    {
+        _speed = percent;
+        if (_baseBpm is double baseBpm && baseBpm > 0)
+        {
+            _speed = Math.Clamp(percent, BpmMin * 100.0 / baseBpm, BpmMax * 100.0 / baseBpm);
+        }
+
+        try
+        {
+            var result = await JS.InvokeAsync<SpeedInfo?>("osmdInterop.setSpeed", ScoreContainer, _speed / 100.0);
+            if (result is not null)
+            {
+                _duration = result.Duration;
+            }
+        }
+        catch (JSException)
+        {
+            // Lecteur indisponible : le réglage reste affiché, il s'appliquera au prochain rendu.
+        }
+        catch (JSDisconnectedException)
+        {
         }
     }
 

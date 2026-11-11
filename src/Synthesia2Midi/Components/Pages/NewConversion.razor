@@ -930,18 +930,20 @@
                 }
             </div>
 
-            @if (!_probeActive)
-            {
-                <p class="s2m-field-hint">Lit 10 secondes à partir du début et montre les notes que la conversion trouverait avec ces réglages. Ensuite, le seuil, la ligne du clavier et le début se règlent en voyant le résultat.</p>
+            <div class="s2m-probe-body">
+                @if (!_probeActive)
+                {
+                    <div class="s2m-probe-intro">
+                        <p class="s2m-field-hint">Lit 10 secondes à partir du début et montre les notes que la conversion trouverait avec ces réglages. Ensuite, le seuil, la ligne du clavier et le début se règlent en voyant le résultat.</p>
                 <div class="s2m-row">
                     <button type="button" class="s2m-btn s2m-btn-secondary s2m-btn-sm" @onclick="StartProbe" disabled="@(TimeError is not null)">
                         <Icon Name="piano" Size="18" /><span class="s2m-btn-label">Tester sur un extrait</span>
                     </button>
                 </div>
-            }
-            else
-            {
-                <div class="s2m-probe-roll">
+                    </div>
+                }
+                <div class="@(_probeActive ? "s2m-probe-content" : "s2m-probe-content is-idle")">
+                    <div class="s2m-probe-roll">
                     <canvas class="s2m-probe-canvas" @ref="_probeCanvas" role="img"
                             aria-label="@(_probeStats is null ? "Rouleau de notes de l'extrait" : $"Rouleau de notes de l'extrait : {_probeStats.Notes} notes")"></canvas>
                     @if (ProbeBusy)
@@ -956,30 +958,33 @@
                     <span>@UiFormat.Time(from)</span><span>@UiFormat.Time(from + ThresholdPreviewService.ExtractSeconds)</span>
                 </div>
 
-                @if (_probePhase == ProbePhase.Failed && _probeError is not null)
-                {
-                    <p class="s2m-field-error" role="alert"><Icon Name="alert" Size="16" /><span>@_probeError</span></p>
-                }
-                else if (_probe is not null && _probeStats is not null)
-                {
-                    var verdict = ProbeVerdict;
-                    <dl class="s2m-probe-stats">
-                        <div class="s2m-probe-stat"><dt>Notes</dt><dd>@_probeStats.Notes</dd></div>
-                        <div class="s2m-probe-stat"><dt>Par seconde</dt><dd>@Fmt1(_probeStats.PerSecond)</dd></div>
-                        <div class="s2m-probe-stat"><dt>Touches reconnues</dt><dd>@_probe.KeyCount</dd></div>
-                    </dl>
-                    <p class="s2m-probe-verdict @verdict.Kind" role="status"><Icon Name="@verdict.Icon" Size="16" /><span>@verdict.Text</span></p>
-                    @if (_separateHands)
+                <div class="s2m-probe-result">
+                    @if (_probePhase == ProbePhase.Failed && _probeError is not null)
                     {
-                        <div class="s2m-probe-legend">
-                            <span><i style="background: var(--hand-right)"></i>Main droite</span>
-                            <span><i style="background: var(--hand-left)"></i>Main gauche</span>
-                        </div>
+                        <p class="s2m-field-error" role="alert"><Icon Name="alert" Size="16" /><span>@_probeError</span></p>
                     }
-                }
+                    else if (_probe is not null && _probeStats is not null)
+                    {
+                        var verdict = ProbeVerdict;
+                        <dl class="s2m-probe-stats">
+                            <div class="s2m-probe-stat"><dt>Notes</dt><dd>@_probeStats.Notes</dd></div>
+                            <div class="s2m-probe-stat"><dt>Par seconde</dt><dd>@Fmt1(_probeStats.PerSecond)</dd></div>
+                            <div class="s2m-probe-stat"><dt>Touches reconnues</dt><dd>@_probe.KeyCount</dd></div>
+                        </dl>
+                        <p class="s2m-probe-verdict @verdict.Kind" role="status"><Icon Name="@verdict.Icon" Size="16" /><span>@verdict.Text</span></p>
+                        @if (_separateHands)
+                        {
+                            <div class="s2m-probe-legend">
+                                <span><i style="background: var(--hand-right)"></i>Main droite</span>
+                                <span><i style="background: var(--hand-left)"></i>Main gauche</span>
+                            </div>
+                        }
+                    }
+                </div>
 
                 <p class="s2m-field-hint">Chaque barre est une note telle que la conversion la lirait : des barres nettes sont de vraies notes, une pluie de petits traits est du bruit. Le seuil se met à jour en direct ; la ligne du clavier et le début relancent la lecture.</p>
-            }
+                </div>
+            </div>
         </section>
     };
 
