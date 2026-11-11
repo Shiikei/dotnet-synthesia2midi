@@ -45,7 +45,9 @@ public static class MusicXmlScoreWriter
     {
         var midiFile = MidiFile.Read(midiPath);
         var ticksPerBeat = midiFile.TimeDivision is TicksPerQuarterNoteTimeDivision tpq ? tpq.TicksPerQuarterNote : 480;
-        var bpm = (int)Math.Round(midiFile.GetTempoMap().GetTempoAtTime(new MidiTimeSpan(0)).BeatsPerMinute);
+        var exactBpm = midiFile.GetTempoMap().GetTempoAtTime(new MidiTimeSpan(0)).BeatsPerMinute;
+        var bpm = (int)Math.Round(exactBpm); // affiché (♩ = …)
+        var soundTempo = exactBpm.ToString("0.##", CultureInfo.InvariantCulture); // lecture exacte
 
         var midiNotes = midiFile.GetNotes().OrderBy(n => n.Time).ToList();
         var shift = ComputeGridShift(midiNotes, ticksPerBeat);
@@ -111,7 +113,7 @@ public static class MusicXmlScoreWriter
                 xml.Append(CultureInfo.InvariantCulture,
                     $"<direction placement=\"above\"><direction-type><metronome><beat-unit>quarter</beat-unit>" +
                     $"<per-minute>{bpm}</per-minute></metronome></direction-type><staff>1</staff>" +
-                    $"<sound tempo=\"{bpm}\"/></direction>");
+                    $"<sound tempo=\"{soundTempo}\"/></direction>");
             }
 
             foreach (var staff in new[] { 1, 2 })

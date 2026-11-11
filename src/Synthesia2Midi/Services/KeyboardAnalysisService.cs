@@ -149,7 +149,125 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
         }
     }
 
-    public int EstimateBpm(IReadOnlyList<NoteEvent> noteEvents)
+    /// <summary>
+    /// Tempo du morceau en BPM (décimal : un tempo arrondi à l'entier fait dériver la grille
+    /// sur plusieurs minutes). 2026-11-11 : on cherche d'abord le tempo dont la grille de
+    /// doubles-croches colle le mieux aux attaques (voir EstimateBpmByGrid) ; l'ancienne
+    /// heuristique « intervalle médian = double-croche » ne sert plus qu'en secours, quand
+    /// aucune grille ne ressort (jeu humain, rubato). Cas réel : Sunflower donnait 106 BPM au
+    /// lieu de 88 (68 mesures au lieu de 57).
+    /// </summary>
+    public double EstimateBpm(IReadOnlyList<NoteEvent> noteEvents)
+    {
+        var onsetTimes = noteEvents.Where(e => e.IsNoteOn).Select(e => e.TimestampSeconds).ToList();
+        var byGrid = EstimateBpmByGrid(onsetTimes);
+        if (byGrid is double gridBpm)
+        {
+            logger.LogInformation("Tempo détecté par alignement de grille : {Bpm:F2} BPM.", gridBpm);
+            return gridBpm;
+        }
+
+        var fallback = EstimateBpmByMedianInterval(noteEvents);
+        logger.LogInformation("Aucune grille nette : tempo estimé par l'intervalle médian, {Bpm} BPM.", fallback);
+        return fallback;
+    }
+
+    /// <summary>
+    /// Les vidéos Synthesia sont générées par ordinateur : les attaques tombent exactement sur une
+    /// grille régulière. Pour chaque tempo candidat (40–200 BPM, pas 0,1), on mesure à quel point
+    /// les attaques s'alignent sur sa grille de doubles-croches (longueur du vecteur moyen des
+    /// phases, 0 = aléatoire, 1 = parfait). Le bon tempo donne un pic net (75 → 0,89 sur Kimetsu,
+    /// 88 → 0,70 sur Sunflower) ; les tempos voisins décrochent vite car l'erreur s'accumule sur
+    /// toute la durée. Un tempo deux fois plus lent qui s'aligne presque aussi bien est préféré
+    /// (une grille alignée l'est aussi à tempo double). Sous MinGridAlignment : null (pas de grille).
+    /// </summary>
+    internal static double? EstimateBpmByGrid(IReadOnlyList<double> onsetTimes)
+    {
+        const double minCandidate = 40.0;
+        const double maxCandidate = 200.0;
+        const double coarseStep = 0.1;
+        const double minGridAlignment = 0.35;
+        const double halfTempoTolerance = 0.85;
+
+        // Attaques dédoublonnées (les notes d'un accord tombent sur la même image).
+        var onsets = new List<double>();
+        foreach (var t in onsetTimes.OrderBy(t => t))
+        {
+            if (onsets.Count == 0 || t - onsets[^1] > 0.03)
+            {
+                onsets.Add(t);
+            }
+        }
+
+        if (onsets.Count < 16)
+        {
+            return null;
+        }
+
+        double Alignment(double bpm)
+        {
+            var period = 60.0 / bpm / 4.0;
+            double sin = 0, cos = 0;
+            foreach (var t in onsets)
+            {
+                var angle = 2 * Math.PI * t / period;
+                sin += Math.Sin(angle);
+                cos += Math.Cos(angle);
+            }
+
+            return Math.Sqrt(sin * sin + cos * cos) / onsets.Count;
+        }
+
+        var bestBpm = 0.0;
+        var bestScore = -1.0;
+        for (var bpm = minCandidate; bpm <= maxCandidate + 1e-9; bpm += coarseStep)
+        {
+            var score = Alignment(bpm);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestBpm = bpm;
+            }
+        }
+
+        if (bestScore < minGridAlignment)
+        {
+            return null;
+        }
+
+        // Préférer la moitié du tempo si elle s'aligne presque aussi bien (erreur d'octave).
+        while (bestBpm / 2 >= minCandidate)
+        {
+            var half = Refine(bestBpm / 2);
+            if (half.Score < bestScore * halfTempoTolerance)
+            {
+                break;
+            }
+
+            (bestBpm, bestScore) = (half.Bpm, half.Score);
+        }
+
+        return Math.Round(Refine(bestBpm).Bpm, 2);
+
+        // Affinage autour d'un candidat (±0,2 BPM, pas 0,01).
+        (double Bpm, double Score) Refine(double center)
+        {
+            var bpm = center;
+            var score = Alignment(center);
+            for (var b = center - 0.2; b <= center + 0.2 + 1e-9; b += 0.01)
+            {
+                var s = Alignment(b);
+                if (s > score)
+                {
+                    (bpm, score) = (b, s);
+                }
+            }
+
+            return (bpm, score);
+        }
+    }
+
+    private static int EstimateBpmByMedianInterval(IReadOnlyList<NoteEvent> noteEvents)
     {
         const int defaultBpm = 120;
         const int minBpm = 40;

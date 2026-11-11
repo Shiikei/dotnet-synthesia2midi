@@ -25,7 +25,7 @@ public class DryWetMidiWriterService(ILogger<DryWetMidiWriterService> logger) : 
 
     public Task<string> WriteAsync(
         IEnumerable<NoteEvent> noteEvents,
-        int bpm,
+        double bpm,
         string destinationPath,
         CancellationToken cancellationToken)
     {
@@ -92,9 +92,9 @@ public class DryWetMidiWriterService(ILogger<DryWetMidiWriterService> logger) : 
         return Task.FromResult(destinationPath);
     }
 
-    private static long SecondsToTicks(double seconds, int bpm)
+    private static long SecondsToTicks(double seconds, double bpm)
         => (long)Math.Round(seconds * TicksPerQuarterNote * bpm / 60.0);
 
-    private static long MicrosecondsPerQuarterNote(int bpm)
-        => (long)Math.Round(60_000_000.0 / Math.Max(bpm, 1));
+    private static long MicrosecondsPerQuarterNote(double bpm)
+        => (long)Math.Round(60_000_000.0 / Math.Max(bpm, 1.0));
 }

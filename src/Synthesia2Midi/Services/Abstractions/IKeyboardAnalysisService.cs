@@ -20,7 +20,7 @@ public interface IKeyboardAnalysisService
 
     /// Heuristique grossière basée sur les intervalles entre attaques (brief §"Détection du
     /// tempo") — voir le commentaire d'implémentation pour ses limites connues.
-    int EstimateBpm(IReadOnlyList<NoteEvent> noteEvents);
+    double EstimateBpm(IReadOnlyList<NoteEvent> noteEvents);
 }
 
 public record KeyboardLayout(IReadOnlyList<KeyRegion> Keys, int MiddleCIndex);

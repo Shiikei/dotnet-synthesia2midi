@@ -8,7 +8,7 @@ public interface IMidiWriterService
     /// ticks_par_frame = 960/fps — à généraliser pour un BPM variable.
     Task<string> WriteAsync(
         IEnumerable<NoteEvent> noteEvents,
-        int bpm,
+        double bpm,
         string destinationPath,
         CancellationToken cancellationToken);
 }
