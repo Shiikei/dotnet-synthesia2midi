@@ -136,6 +136,10 @@ public class ConversionBackgroundService(
         // 4. Tempo : détecté si demandé, sinon 120 BPM par défaut.
         var bpm = settings.DetectTempo ? keyboardAnalysis.EstimateBpm(noteEvents) : 120;
 
+        // 4b. Recalage : un temps de la musique tombe pile au début de la mesure 1 (sans ça, le
+        // temps 0 du MIDI est l'instant « Début » de la vidéo, n'importe où dans la mesure).
+        noteEvents = BeatGridAligner.AlignToFirstBeat(noteEvents, bpm, settings.DetectTempo).ToList();
+
         // 5. Écriture MIDI.
         await ReportProgressAsync(conversion.Id, ConversionStatus.WritingMidi, 75, "Écriture du fichier MIDI…", ct);
         var midiPath = Path.Combine(workDir, "output.mid");
