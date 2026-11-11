@@ -1,0 +1,15 @@
+{
+  "_doc": "Valeurs validées à l'oreille / sur partition par l'utilisateur (2026-11-11). Réglages = ceux à utiliser dans /nouvelle pour reconvertir la vidéo avant un contrôle.",
+  "kimetsu": {
+    "title": "Demon Slayer - Kimetsu no Yaiba (Ep.19 ED) - Kamado Tanjiro no Uta | EASY Piano Tutorial",
+    "url": "https://www.youtube.com/watch?v=INmnaUzeqs8",
+    "settings": { "KeyboardHeight": 0.66, "Threshold": 30, "Start": "00:00:11", "End": "00:03:02", "SeparateHandsByColor": true, "DetectTempo": true },
+    "expect": { "bpm": 75, "bpmTolerance": 0.5, "measures": 53, "measuresTolerance": 0, "fifths": -1, "handsSeparated": true }
+  },
+  "sunflower": {
+    "title": "Post Malone, Swae Lee - Sunflower (Spider-Man) - EASY Piano Tutorial",
+    "url": "https://www.youtube.com/watch?v=dP-Pb-kHSL4",
+    "settings": { "KeyboardHeight": 0.75, "Threshold": 30, "Start": "00:00:06", "End": "00:02:42", "SeparateHandsByColor": true, "DetectTempo": true },
+    "expect": { "bpm": 88, "bpmTolerance": 0.5, "measures": 56, "measuresTolerance": 1, "fifths": null, "handsSeparated": true }
+  }
+}
