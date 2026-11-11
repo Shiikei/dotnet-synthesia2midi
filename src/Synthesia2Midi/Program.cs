@@ -93,7 +93,12 @@ app.MapGet("/api/conversions/{id:guid}/{kind}", async (Guid id, string kind, App
         _ => "application/octet-stream",
     };
 
-    return Results.File(path, contentType, Path.GetFileName(path));
+    // Nom du fichier téléchargé = titre de la vidéo (et non « output.mid ») : c'est aussi le titre
+    // que reprennent Online Sequencer, Synthesia ou un DAW à l'import.
+    var downloadName = kind == "calibration"
+        ? Path.GetFileName(path)
+        : Synthesia2Midi.Components.Ui.UiFormat.SafeFileName(conversion.Title) + Path.GetExtension(path);
+    return Results.File(path, contentType, downloadName);
 });
 
 // Image de l'instant « Début » utilisée par l'aperçu de /nouvelle.

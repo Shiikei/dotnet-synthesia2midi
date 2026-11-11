@@ -10,5 +10,6 @@ public interface IMidiWriterService
         IEnumerable<NoteEvent> noteEvents,
         double bpm,
         string destinationPath,
+        string? title,
         CancellationToken cancellationToken);
 }

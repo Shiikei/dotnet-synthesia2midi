@@ -337,12 +337,18 @@ body { margin: 0; font-family: var(--font-sans); font-size: 15px; line-height: 2
 .s2m-page-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
 .s2m-page-title { margin: 0; font: 400 40px/44px var(--font-serif); letter-spacing: -0.01em; color: var(--ink); }
 .s2m-page-title.is-title { font-size: 28px; line-height: 32px; letter-spacing: 0; }
-.s2m-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.s2m-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); grid-template-rows: auto 1fr; gap: var(--space-5); align-items: start; }
+/* Colonne gauche : vidéo puis réglages ; colonne droite : panneau « Test du seuil » sur toute la hauteur.
+   La 2e rangée est en 1fr : quand le panneau grandit, c'est elle qui absorbe, la vidéo et le bloc Extrait ne bougent pas. */
+.s2m-split > .s2m-video { grid-column: 1; grid-row: 1; }
+.s2m-split > .s2m-stack { grid-column: 1; grid-row: 2; }
+.s2m-split > .s2m-probe { grid-column: 2; grid-row: 1 / span 2; }
 .s2m-stack { display: flex; flex-direction: column; gap: var(--space-5); }
 .s2m-actionbar { display: flex; justify-content: flex-end; gap: var(--space-2); }
 
 @container s2m (max-width: 720px) {
-  .s2m-split { grid-template-columns: minmax(0, 1fr); }
+  .s2m-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .s2m-split > .s2m-video, .s2m-split > .s2m-stack, .s2m-split > .s2m-probe { grid-column: auto; grid-row: auto; }
 }
 
 /* ---------- Mobile (≤ 560 px) ---------- */
@@ -440,17 +446,16 @@ a.s2m-btn-ghost, a.s2m-btn-secondary { color: var(--ink); }
 .s2m-probe-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); flex-wrap: nowrap; min-height: 22px; }
 .s2m-probe-title { margin: 0; font: 600 15px/22px var(--font-sans); color: var(--ink); }
 .s2m-probe-aside { font: 400 12px/16px var(--font-mono); color: var(--ink-muted); white-space: nowrap; }
-/* Corps toujours monté : avant le test, il est invisible mais garde sa hauteur, et le texte d'accueil passe par-dessus */
+/* Avant le premier test : seulement le texte d'accueil (pas de place vide réservée). Le panneau est dans sa propre colonne (voir .s2m-split), sa hauteur ne déplace donc plus le bloc Extrait. */
 .s2m-probe-body { position: relative; display: flex; flex-direction: column; }
 .s2m-probe-content { display: flex; flex-direction: column; gap: var(--space-3); }
-.s2m-probe-content.is-idle { visibility: hidden; }
-.s2m-probe-intro { position: absolute; inset: 0 0 auto 0; z-index: 1; display: flex; flex-direction: column; gap: var(--space-3); }
+.s2m-probe-content.is-idle { display: none; }
+.s2m-probe-intro { display: flex; flex-direction: column; gap: var(--space-3); }
 .s2m-probe-roll { position: relative; }
 .s2m-probe-canvas { display: block; width: 100%; height: 150px; border-radius: var(--radius-md); background: var(--surface-sunken); }
 .s2m-probe-axis { display: flex; justify-content: space-between; margin-top: 2px; font: 400 11px/14px var(--font-mono); color: var(--ink-muted); }
 .s2m-probe-busy { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: var(--space-2); border-radius: var(--radius-md); background: color-mix(in srgb, var(--surface-raised) 72%, transparent); color: var(--ink); font: 500 13px/18px var(--font-sans); text-align: center; padding: var(--space-3); }
-/* Place réservée au résultat : stats, verdict (1 à 5 lignes) et légende, pour que rien ne bouge quand ils apparaissent ou changent */
-.s2m-probe-result { display: flex; flex-direction: column; gap: var(--space-3); min-height: 208px; }
+.s2m-probe-result { display: flex; flex-direction: column; gap: var(--space-3); }
 .s2m-probe-stats { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); margin: 0; }
 .s2m-probe-stat { display: flex; flex-direction: column; gap: 0; min-width: 0; }
 .s2m-probe-stat dt { font: 400 12px/16px var(--font-sans); color: var(--ink-muted); }

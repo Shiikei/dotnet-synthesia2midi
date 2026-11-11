@@ -22,11 +22,13 @@ public class DryWetMidiWriterService(ILogger<DryWetMidiWriterService> logger) : 
 {
     // 480 ticks/noire : cohérent avec la version Python (brief §"Algorithme de conversion").
     private const short TicksPerQuarterNote = 480;
+    private const int AcousticGrandPiano = 0; // General MIDI, programme 1 (numéroté 0)
 
     public Task<string> WriteAsync(
         IEnumerable<NoteEvent> noteEvents,
         double bpm,
         string destinationPath,
+        string? title,
         CancellationToken cancellationToken)
     {
         var midiFile = new MidiFile
@@ -39,6 +41,12 @@ public class DryWetMidiWriterService(ILogger<DryWetMidiWriterService> logger) : 
         var tempoTrack = new TrackChunk();
         using (var tempoManager = tempoTrack.ManageTimedEvents())
         {
+            // Nom du morceau (repris comme titre par Online Sequencer, Synthesia, les DAW…).
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                tempoManager.Objects.Add(new TimedEvent(new SequenceTrackNameEvent(title.Trim()), 0));
+            }
+
             tempoManager.Objects.Add(new TimedEvent(new SetTempoEvent(MicrosecondsPerQuarterNote(bpm)), 0));
             // Sans TimeSignature explicite dans le .mid, MuseScore doit deviner la mesure
             // depuis le regroupement des notes — bug réel observé le 2026-08-27 : un
@@ -54,7 +62,9 @@ public class DryWetMidiWriterService(ILogger<DryWetMidiWriterService> logger) : 
 
         var eventsByChannel = noteEvents
             .GroupBy(e => Math.Clamp(e.Channel, 0, 15))
-            .OrderBy(g => g.Key);
+            .OrderBy(g => g.Key)
+            .ToList();
+        var handsSeparated = eventsByChannel.Count > 1;
 
         var trackCount = 0;
         foreach (var channelGroup in eventsByChannel)
@@ -62,6 +72,15 @@ public class DryWetMidiWriterService(ILogger<DryWetMidiWriterService> logger) : 
             var track = new TrackChunk();
             using (var manager = track.ManageTimedEvents())
             {
+                // Nom de piste (canal 0 = main droite, 1 = main gauche : heuristique couleur de
+                // KeyboardAnalysisService) et instrument : piano à queue (General MIDI 0). Sans
+                // Program Change, chaque logiciel choisit son instrument par défaut (Online
+                // Sequencer affichait « Electric Piano »).
+                var trackName = !handsSeparated ? "Piano" : channelGroup.Key == 0 ? "Main droite" : "Main gauche";
+                manager.Objects.Add(new TimedEvent(new SequenceTrackNameEvent(trackName), 0));
+                manager.Objects.Add(new TimedEvent(
+                    new ProgramChangeEvent((SevenBitNumber)AcousticGrandPiano) { Channel = (FourBitNumber)channelGroup.Key }, 0));
+
                 foreach (var evt in channelGroup.OrderBy(e => e.TimestampSeconds))
                 {
                     var ticks = SecondsToTicks(evt.TimestampSeconds, bpm);

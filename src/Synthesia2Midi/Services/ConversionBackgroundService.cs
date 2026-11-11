@@ -143,7 +143,7 @@ public class ConversionBackgroundService(
         // 5. Écriture MIDI.
         await ReportProgressAsync(conversion.Id, ConversionStatus.WritingMidi, 75, "Écriture du fichier MIDI…", ct);
         var midiPath = Path.Combine(workDir, "output.mid");
-        conversion.MidiFilePath = await midiWriter.WriteAsync(noteEvents, bpm, midiPath, ct);
+        conversion.MidiFilePath = await midiWriter.WriteAsync(noteEvents, bpm, midiPath, conversion.Title, ct);
         await db.SaveChangesAsync(ct);
 
         // 6. Partition (MuseScore headless) — best-effort, cf. commentaire de classe.
