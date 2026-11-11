@@ -21,6 +21,7 @@ public partial class ThresholdPreviewService(
     ILogger<ThresholdPreviewService> logger)
 {
     public const double ExtractSeconds = 10;
+    private const int HandSampleMinDiff = 30; // écart de luminosité d'une touche nettement allumée
 
     // Même flux vidéo que la conversion (YtDlpVideoAcquisitionService), sans l'audio.
     private const string VideoOnlyFormat =
@@ -119,6 +120,8 @@ public partial class ThresholdPreviewService(
         var frames = rows.Count;
         var diffs = new byte[frames * keys.Count];
         var hands = new byte[frames * keys.Count];
+        var hues = new double[frames * keys.Count];
+        var saturations = new double[frames * keys.Count];
         var rest = new double[keys.Count];
 
         for (var f = 0; f < frames; f++)
@@ -128,7 +131,7 @@ public partial class ThresholdPreviewService(
             {
                 var key = keys[k];
                 double sum = 0;
-                long sumG = 0, sumB = 0;
+                long sumR = 0, sumG = 0, sumB = 0;
                 var count = 0;
                 for (var x = key.StartX; x < key.EndX; x++)
                 {
@@ -136,6 +139,7 @@ public partial class ThresholdPreviewService(
                     var g = rgb[x * 3 + 1];
                     var b = rgb[x * 3 + 2];
                     sum += 0.299 * r + 0.587 * g + 0.114 * b;
+                    sumR += r;
                     sumG += g;
                     sumB += b;
                     count++;
@@ -150,8 +154,28 @@ public partial class ThresholdPreviewService(
                 // ceil : « écart > seuil » (seuil entier) donne exactement le même résultat
                 // sur l'octet arrondi que sur la valeur réelle.
                 diffs[f * keys.Count + k] = (byte)Math.Min(255, Math.Ceiling(Math.Abs(lum - rest[k])));
-                hands[f * keys.Count + k] = (byte)(count > 0 && sumB > sumG ? 1 : 0);
+                (hues[f * keys.Count + k], saturations[f * keys.Count + k]) = count > 0
+                    ? KeyboardAnalysisService.HueSaturation(sumR / (double)count, sumG / (double)count, sumB / (double)count)
+                    : (double.NaN, 0);
             }
+        }
+
+        // Mains : même méthode que la conversion (HandAssigner, deux familles de couleurs). Les
+        // échantillons sont les touches nettement allumées (écart ≥ HandSampleMinDiff) ; l'index
+        // de la touche sert de hauteur (seul l'ordre grave → aigu compte).
+        var samples = new List<(double, double, double)>();
+        for (var i = 0; i < diffs.Length; i++)
+        {
+            if (diffs[i] >= HandSampleMinDiff)
+            {
+                samples.Add((hues[i], saturations[i], i % keys.Count));
+            }
+        }
+
+        var handColors = HandAssigner.FindHandColors(samples, out _);
+        for (var i = 0; i < hands.Length; i++)
+        {
+            hands[i] = (byte)(handColors?.HandOf(hues[i], saturations[i], i % keys.Count) ?? 0);
         }
 
         var duration = rows[^1].TimestampSeconds;
@@ -367,7 +391,7 @@ public record PreviewClip(
     string? FrameUrl);
 
 /// Écarts de luminosité par image et par touche (Diffs[frame * KeyCount + key]),
-/// et couleur dominante (Hands, 1 = bleu > vert = main gauche) au même indice.
+/// et main (Hands, 1 = main gauche, 0 = main droite, d'après les deux couleurs de la vidéo) au même indice.
 public record ThresholdProbe(
     int Frames,
     double Fps,

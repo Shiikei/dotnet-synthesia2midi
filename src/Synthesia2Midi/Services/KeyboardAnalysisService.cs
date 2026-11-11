@@ -421,7 +421,7 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
         }
     }
 
-    private static (double Hue, double Saturation) HueSaturation(double r, double g, double b)
+    internal static (double Hue, double Saturation) HueSaturation(double r, double g, double b)
     {
         var max = Math.Max(r, Math.Max(g, b));
         var min = Math.Min(r, Math.Min(g, b));

@@ -13,54 +13,70 @@ namespace Synthesia2Midi.Services;
 /// </summary>
 public static class HandAssigner
 {
-    private const double MinSaturation = 0.25;   // en dessous : touche peu colorée, teinte peu fiable
+    internal const double MinSaturation = 0.25;   // en dessous : touche peu colorée, teinte peu fiable
     private const double MinHueGap = 25;          // écart minimal entre les deux familles (degrés)
     private const double MinClusterShare = 0.05;  // une « famille » sous 5 % des notes n'est pas une main
 
-    public static List<NoteEvent> Assign(IReadOnlyList<NoteEvent> events, ILogger logger)
+    /// <summary>Teintes des deux mains et hauteur de partage (pour les notes à la couleur illisible).</summary>
+    public sealed record HandColors(double LeftHue, double RightHue, double SplitPitch, int LeftCount, int RightCount, double LeftPitch, double RightPitch)
     {
-        var onsets = events.Where(e => e.IsNoteOn).ToList();
-        var colored = onsets.Where(e => e.Saturation >= MinSaturation && !double.IsNaN(e.Hue)).ToList();
+        /// <summary>1 = main gauche, 0 = main droite.</summary>
+        public int HandOf(double hue, double saturation, double pitch) =>
+            saturation >= MinSaturation && !double.IsNaN(hue)
+                ? (HueDistance(hue, LeftHue) < HueDistance(hue, RightHue) ? 1 : 0)
+                : (pitch < SplitPitch ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Deux familles de teintes parmi des échantillons (teinte, saturation, hauteur). « Hauteur » =
+    /// note MIDI, ou simplement l'index de la touche (seul l'ordre grave → aigu compte).
+    /// Null si une seule couleur ressort ou trop peu d'échantillons colorés.
+    /// </summary>
+    public static HandColors? FindHandColors(IReadOnlyList<(double Hue, double Saturation, double Pitch)> samples, out string reason)
+    {
+        var colored = samples.Where(s => s.Saturation >= MinSaturation && !double.IsNaN(s.Hue)).ToList();
         if (colored.Count < 8)
         {
-            logger.LogInformation("Mains : trop peu de notes colorées ({Count}), pas de séparation.", colored.Count);
-            return events.Select(e => e with { Channel = 0 }).ToList();
+            reason = $"trop peu de notes colorées ({colored.Count})";
+            return null;
         }
 
-        var (centerA, centerB) = TwoMeansOnHueCircle(colored.Select(e => e.Hue).ToList());
-        var inA = colored.Where(e => HueDistance(e.Hue, centerA) <= HueDistance(e.Hue, centerB)).ToList();
-        var inB = colored.Where(e => HueDistance(e.Hue, centerA) > HueDistance(e.Hue, centerB)).ToList();
+        var (centerA, centerB) = TwoMeansOnHueCircle(colored.Select(s => s.Hue).ToList());
+        var inA = colored.Where(s => HueDistance(s.Hue, centerA) <= HueDistance(s.Hue, centerB)).ToList();
+        var inB = colored.Where(s => HueDistance(s.Hue, centerA) > HueDistance(s.Hue, centerB)).ToList();
 
         var gap = HueDistance(centerA, centerB);
         var minShare = Math.Min(inA.Count, inB.Count) / (double)colored.Count;
         if (gap < MinHueGap || minShare < MinClusterShare)
         {
-            logger.LogInformation(
-                "Mains : une seule couleur détectée (teintes {A:F0}° / {B:F0}°, écart {Gap:F0}°, part {Share:P0}), pas de séparation.",
-                centerA, centerB, gap, minShare);
+            reason = $"une seule couleur (teintes {centerA:F0}° / {centerB:F0}°, écart {gap:F0}°, part {minShare:P0})";
+            return null;
+        }
+
+        var pitchA = inA.Average(s => s.Pitch);
+        var pitchB = inB.Average(s => s.Pitch);
+        reason = string.Empty;
+        return pitchA < pitchB
+            ? new HandColors(centerA, centerB, (pitchA + pitchB) / 2, inA.Count, inB.Count, pitchA, pitchB)
+            : new HandColors(centerB, centerA, (pitchA + pitchB) / 2, inB.Count, inA.Count, pitchB, pitchA);
+    }
+
+    public static List<NoteEvent> Assign(IReadOnlyList<NoteEvent> events, ILogger logger)
+    {
+        var hands = FindHandColors(
+            events.Where(e => e.IsNoteOn).Select(e => (e.Hue, e.Saturation, (double)e.MidiNote)).ToList(),
+            out var reason);
+        if (hands is null)
+        {
+            logger.LogInformation("Mains : {Reason}, pas de séparation.", reason);
             return events.Select(e => e with { Channel = 0 }).ToList();
         }
 
-        var pitchA = inA.Average(e => e.MidiNote);
-        var pitchB = inB.Average(e => e.MidiNote);
-        var leftHue = pitchA < pitchB ? centerA : centerB;
-        var rightHue = pitchA < pitchB ? centerB : centerA;
-        var splitPitch = (pitchA + pitchB) / 2;
-
         logger.LogInformation(
             "Mains : teinte {Right:F0}° → main droite ({RightCount} notes, hauteur moy. {RightPitch:F0}), teinte {Left:F0}° → main gauche ({LeftCount} notes, hauteur moy. {LeftPitch:F0}).",
-            rightHue, pitchA < pitchB ? inB.Count : inA.Count, Math.Max(pitchA, pitchB),
-            leftHue, pitchA < pitchB ? inA.Count : inB.Count, Math.Min(pitchA, pitchB));
+            hands.RightHue, hands.RightCount, hands.RightPitch, hands.LeftHue, hands.LeftCount, hands.LeftPitch);
 
-        int HandOf(NoteEvent onset)
-        {
-            if (onset.Saturation >= MinSaturation && !double.IsNaN(onset.Hue))
-            {
-                return HueDistance(onset.Hue, leftHue) < HueDistance(onset.Hue, rightHue) ? 1 : 0;
-            }
-
-            return onset.MidiNote < splitPitch ? 1 : 0; // couleur illisible : on tranche à la hauteur
-        }
+        int HandOf(NoteEvent onset) => hands.HandOf(onset.Hue, onset.Saturation, onset.MidiNote);
 
         // Le note-off reprend le canal de son note-on (même touche).
         var openChannel = new Dictionary<int, int>();
@@ -130,7 +146,7 @@ public static class HandAssigner
         return (Math.Atan2(sin, cos) * 180 / Math.PI + 360) % 360;
     }
 
-    private static double HueDistance(double a, double b)
+    internal static double HueDistance(double a, double b)
     {
         var d = Math.Abs(a - b) % 360;
         return d > 180 ? 360 - d : d;
