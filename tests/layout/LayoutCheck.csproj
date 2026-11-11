@@ -7,6 +7,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Usings implicites du SDK Web dont dépend le code partagé. -->
+    <Using Include="Microsoft.Extensions.Logging" />
     <Compile Include="../../src/Synthesia2Midi/Services/KeyboardAnalysisService.cs" />
     <Compile Include="../../src/Synthesia2Midi/Services/Abstractions/*.cs" />
   </ItemGroup>
