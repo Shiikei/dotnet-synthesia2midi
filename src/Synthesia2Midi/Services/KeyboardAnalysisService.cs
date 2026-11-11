@@ -79,6 +79,50 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
         }
         FlushRun(pixelCount);
 
+        // 1) Méthode historique : une région par segment blanc/noir, do repéré par le motif
+        //    [W,W,B,W,B,W,W]. Gardée telle quelle quand le résultat est cohérent (alternance
+        //    blanc/noir conforme à un clavier réel sur toute la ligne) : aucun changement
+        //    pour les vidéos qui fonctionnaient déjà (références Kimetsu, Sunflower).
+        List<KeyRegion>? legacyKeys = null;
+        int? legacyMiddleC = null;
+        if (runs.Count >= 12)
+        {
+            legacyKeys = runs
+                .Select((run, index) => new KeyRegion(index, run.StartX, run.StartX + run.Length, run.IsWhite))
+                .ToList();
+            legacyMiddleC = TryDetectMiddleCIndex(legacyKeys);
+
+            if (legacyMiddleC is int mc && IsChromaticallyConsistent(legacyKeys, mc))
+            {
+                logger.LogInformation(
+                    "Clavier détecté : {KeyCount} touches, do central à l'index {MiddleC}.",
+                    legacyKeys.Count, mc);
+                return new KeyboardLayout(legacyKeys, mc);
+            }
+        }
+
+        // 2) Repérage par les touches noires (2026-11-11, cas « Shinobu Kocho Theme ») : sur un
+        //    clavier de 88 touches fines, la ligne entre deux blanches voisines (si-do, mi-fa)
+        //    est trop pâle et deux blanches fusionnent en un seul segment. Les noires, elles,
+        //    restent nettes : leurs groupes de 2 et 3 suffisent à reconstruire tout le clavier.
+        if (TryBuildFromBlackKeys(runs, pixelCount, out var rebuiltKeys, out var rebuiltMiddleC, out var reason))
+        {
+            logger.LogInformation(
+                "Clavier reconstruit d'après les touches noires : {KeyCount} touches, do central à l'index {MiddleC}.",
+                rebuiltKeys.Count, rebuiltMiddleC);
+            return new KeyboardLayout(rebuiltKeys, rebuiltMiddleC);
+        }
+
+        // 3) Dernier recours : résultat historique même incohérent (comportement d'avant).
+        if (legacyKeys is not null && legacyMiddleC is int fallbackMiddleC)
+        {
+            logger.LogWarning(
+                "Clavier détecté avec une alternance blanc/noir incohérente ({KeyCount} touches) ; " +
+                "repérage par les touches noires impossible ({Reason}).",
+                legacyKeys.Count, reason);
+            return new KeyboardLayout(legacyKeys, fallbackMiddleC);
+        }
+
         if (runs.Count < 12)
         {
             throw new InvalidOperationException(
@@ -86,17 +130,191 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
                 "vérifie keyboard_height (croise-t-il bien touches blanches ET noires ?) et threshold.");
         }
 
-        var keys = runs
-            .Select((run, index) => new KeyRegion(index, run.StartX, run.StartX + run.Length, run.IsWhite))
+        throw new InvalidOperationException(
+            $"Aucun do détecté (motif [W,W,B,W,B,W,W] introuvable, repérage par les touches noires : {reason}) : " +
+            "la détection des touches a échoué.");
+    }
+
+    /// Classes de hauteur des touches blanches (do = 0).
+    private static bool IsWhitePitchClass(int semitone) => ((semitone % 12) + 12) % 12 is 0 or 2 or 4 or 5 or 7 or 9 or 11;
+
+    /// Vrai si chaque touche a la couleur attendue d'après sa distance au do central.
+    private static bool IsChromaticallyConsistent(IReadOnlyList<KeyRegion> keys, int middleCIndex)
+    {
+        for (var i = 0; i < keys.Count; i++)
+        {
+            if (keys[i].IsWhite != IsWhitePitchClass(i - middleCIndex))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Reconstruit le clavier complet à partir des seules touches noires de la ligne :
+    /// 1. les noires sont régulièrement espacées par demi-ton, l'écart entre deux noires voisines
+    ///    vaut donc 2 demi-tons (dans un groupe) ou 3 (entre deux groupes, mi-fa ou si-do) ;
+    /// 2. les groupes alternent 2 noires (do#, ré#) et 3 noires (fa#, sol#, la#), ce qui nomme
+    ///    chaque noire ;
+    /// 3. les blanches sont placées entre les noires (1 ou 2 selon l'écart) et aux deux bouts,
+    ///    d'après la largeur d'une blanche (12 demi-tons = 7 blanches).
+    /// Échoue (reason) dès qu'un écart ou un groupe ne colle pas (noire masquée, effet lumineux…).
+    /// </summary>
+    private static bool TryBuildFromBlackKeys(
+        IReadOnlyList<(bool IsWhite, int StartX, int Length)> runs,
+        int pixelCount,
+        out List<KeyRegion> keys,
+        out int middleCIndex,
+        out string reason)
+    {
+        keys = [];
+        middleCIndex = 0;
+
+        // Noires entières uniquement (un segment coupé par le bord de l'image n'est pas fiable).
+        var blacks = runs
+            .Where(r => !r.IsWhite && r.StartX > 0 && r.StartX + r.Length < pixelCount)
+            .Select(r => (Start: r.StartX, End: r.StartX + r.Length))
+            .ToList();
+        if (blacks.Count >= 5)
+        {
+            var medianWidth = Median(blacks.Select(b => (double)(b.End - b.Start)));
+            blacks = blacks
+                .Where(b => b.End - b.Start >= 0.5 * medianWidth && b.End - b.Start <= 1.6 * medianWidth)
+                .ToList();
+        }
+        if (blacks.Count < 5)
+        {
+            reason = $"{blacks.Count} touche(s) noire(s) exploitable(s)";
+            return false;
+        }
+
+        var centers = blacks.Select(b => (b.Start + b.End) / 2.0).ToList();
+        var gaps = centers.Zip(centers.Skip(1), (a, b) => b - a).ToList();
+        var medianGap = Median(gaps);
+        var semitoneWidth = Median(gaps.Where(g => g < 1.25 * medianGap)) / 2;
+
+        var steps = new List<int>(gaps.Count);
+        foreach (var gap in gaps)
+        {
+            var ratio = gap / semitoneWidth;
+            var step = (int)Math.Round(ratio);
+            if (step is not (2 or 3) || Math.Abs(ratio - step) > 0.3)
+            {
+                reason = $"écart de {ratio:F2} demi-tons entre deux touches noires";
+                return false;
+            }
+            steps.Add(step);
+        }
+
+        // Groupes de noires séparés par les écarts de 3 demi-tons.
+        var groupSizes = new List<int> { 1 };
+        foreach (var step in steps)
+        {
+            if (step == 3) groupSizes.Add(1);
+            else groupSizes[^1]++;
+        }
+
+        var inner = groupSizes.Skip(1).Take(groupSizes.Count - 2).ToList();
+        if (inner.Count == 0)
+        {
+            reason = "clavier trop court (moins d'un groupe complet de touches noires)";
+            return false;
+        }
+        if (groupSizes.Any(s => s > 3)
+            || inner.Any(s => s is not (2 or 3))
+            || inner.Zip(inner.Skip(1), (a, b) => a + b).Any(sum => sum != 5))
+        {
+            reason = $"groupes de touches noires incohérents ({string.Join("-", groupSizes)})";
+            return false;
+        }
+
+        // Le premier groupe (éventuellement incomplet) est du type opposé au suivant.
+        var firstGroupType = 5 - inner[0];
+        if (groupSizes[0] > firstGroupType)
+        {
+            reason = $"groupes de touches noires incohérents ({string.Join("-", groupSizes)})";
+            return false;
+        }
+        int[] groupPitchClasses = firstGroupType == 2 ? [1, 3] : [6, 8, 10];
+        var firstBlackPitchClass = groupPitchClasses[groupPitchClasses.Length - groupSizes[0]];
+
+        // Demi-tons absolus (origine arbitraire positive, seules les différences comptent).
+        var semitones = new List<int>(blacks.Count) { 120 + firstBlackPitchClass };
+        foreach (var step in steps)
+        {
+            semitones.Add(semitones[^1] + step);
+        }
+
+        // Étendue du clavier = premier et dernier segment blanc.
+        var whiteRuns = runs.Where(r => r.IsWhite).ToList();
+        var left = whiteRuns.Count > 0 ? whiteRuns[0].StartX : 0;
+        var right = whiteRuns.Count > 0 ? whiteRuns[^1].StartX + whiteRuns[^1].Length : pixelCount;
+        var whiteWidth = 12 * semitoneWidth / 7;
+
+        // Blanches au-delà de la première / dernière noire : autant que la place le permet,
+        // sans jamais franchir une noire (absente car hors image).
+        int EdgeWhiteCount(double distance, int fromSemitone, int direction)
+        {
+            var wanted = Math.Max(0, (int)Math.Round(distance / whiteWidth));
+            var count = 0;
+            var semitone = fromSemitone;
+            while (count < wanted)
+            {
+                semitone += direction;
+                if (!IsWhitePitchClass(semitone)) break;
+                count++;
+            }
+            return count;
+        }
+
+        var leftCount = EdgeWhiteCount(centers[0] - left, semitones[0], -1);
+        var rightCount = EdgeWhiteCount(right - centers[^1], semitones[^1], +1);
+
+        var regions = new List<(int Start, int End, bool IsWhite)>();
+        void AddWhites(double from, double to, int count)
+        {
+            for (var j = 0; j < count; j++)
+            {
+                var x0 = from + (to - from) * j / count;
+                var x1 = from + (to - from) * (j + 1) / count;
+                var margin = x1 - x0 > 6 ? 1 : 0; // évite la fine ligne de séparation
+                regions.Add(((int)Math.Round(x0) + margin, (int)Math.Round(x1) - margin, true));
+            }
+        }
+
+        AddWhites(left, blacks[0].Start, leftCount);
+        for (var i = 0; i < blacks.Count; i++)
+        {
+            regions.Add((blacks[i].Start, blacks[i].End, false));
+            if (i + 1 < blacks.Count)
+            {
+                AddWhites(blacks[i].End, blacks[i + 1].Start, semitones[i + 1] - semitones[i] - 1);
+            }
+        }
+        AddWhites(blacks[^1].End, right, rightCount);
+
+        keys = regions
+            .Select((r, index) => new KeyRegion(index, r.Start, Math.Max(r.End, r.Start + 1), r.IsWhite))
             .ToList();
 
-        var middleCIndex = DetectMiddleCIndex(keys);
+        if (TryDetectMiddleCIndex(keys) is not int middleC)
+        {
+            reason = "aucun do complet dans le clavier reconstruit";
+            return false;
+        }
 
-        logger.LogInformation(
-            "Clavier détecté : {KeyCount} touches, do central à l'index {MiddleC}.",
-            keys.Count, middleCIndex);
+        middleCIndex = middleC;
+        reason = string.Empty;
+        return true;
+    }
 
-        return new KeyboardLayout(keys, middleCIndex);
+    private static double Median(IEnumerable<double> values)
+    {
+        var sorted = values.OrderBy(v => v).ToList();
+        if (sorted.Count == 0) return 0;
+        var mid = sorted.Count / 2;
+        return sorted.Count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
     }
 
     public IEnumerable<NoteEvent> ExtractNoteEvents(
@@ -350,7 +568,8 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
     /// correspondante est un do. Ce motif est unique dans l'octave (transition B→C) —
     /// la transition E→F, seule autre paire de touches blanches adjacentes, produit
     /// [W,W,B,W,B,W,B] (ne diffère qu'au 7ᵉ élément), d'où la fenêtre de 7 touches.
-    private static int DetectMiddleCIndex(IReadOnlyList<KeyRegion> keys)
+    /// Null si aucun do n'est trouvé.
+    private static int? TryDetectMiddleCIndex(IReadOnlyList<KeyRegion> keys)
     {
         ReadOnlySpan<bool> pattern = [true, true, false, true, false, true, true];
         var candidates = new List<int>();
@@ -375,8 +594,7 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
 
         if (candidates.Count == 0)
         {
-            throw new InvalidOperationException(
-                "Aucun do détecté (motif [W,W,B,W,B,W,W] introuvable) : la détection des touches a échoué.");
+            return null;
         }
 
         candidates.Sort();
