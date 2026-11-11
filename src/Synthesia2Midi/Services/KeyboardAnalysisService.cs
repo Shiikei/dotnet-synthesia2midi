@@ -107,7 +107,6 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
     {
         var keys = layout.Keys;
         var pressed = new bool[keys.Count];
-        var pressedChannel = new int[keys.Count];
         double[]? restLuminosities = null;
 
         // Buffers réutilisés à chaque frame. Important : toute lecture du ReadOnlySpan<byte>
@@ -115,11 +114,12 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
         // le premier `yield return` de cette itération — d'où l'extraction dans une méthode
         // à part qui ne contient elle-même aucun yield.
         var frameLuminosities = new double[keys.Count];
-        var frameChannels = new int[keys.Count];
+        var frameHues = new double[keys.Count];
+        var frameSaturations = new double[keys.Count];
 
         foreach (var frame in rows)
         {
-            ComputeFrameKeyStats(frame.Rgb.Span, keys, separateHandsByColor, frameLuminosities, frameChannels);
+            ComputeFrameKeyStats(frame.Rgb.Span, keys, frameLuminosities, frameHues, frameSaturations);
 
             // La toute première frame sert de référence "touches relâchées" (brief : valeur
             // de repos), en supposant qu'aucune touche n'est enfoncée à l'image 0.
@@ -138,12 +138,13 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
 
                 if (isPressedNow)
                 {
-                    pressedChannel[i] = frameChannels[i];
-                    yield return new NoteEvent(midiNote, frame.TimestampSeconds, true, 80, pressedChannel[i]);
+                    // Main attribuée après coup d'après la couleur (HandAssigner) : canal 0 ici.
+                    yield return new NoteEvent(midiNote, frame.TimestampSeconds, true, 80, 0,
+                        frameHues[i], frameSaturations[i]);
                 }
                 else
                 {
-                    yield return new NoteEvent(midiNote, frame.TimestampSeconds, false, 0, pressedChannel[i]);
+                    yield return new NoteEvent(midiNote, frame.TimestampSeconds, false, 0, 0);
                 }
             }
         }
@@ -385,15 +386,15 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
     private static void ComputeFrameKeyStats(
         ReadOnlySpan<byte> row,
         IReadOnlyList<KeyRegion> keys,
-        bool separateHandsByColor,
         double[] luminosities,
-        int[] channels)
+        double[] hues,
+        double[] saturations)
     {
         for (var i = 0; i < keys.Count; i++)
         {
             var key = keys[i];
             double sumLum = 0;
-            long sumG = 0, sumB = 0;
+            long sumR = 0, sumG = 0, sumB = 0;
             var count = 0;
 
             for (var x = key.StartX; x < key.EndX; x++)
@@ -402,6 +403,7 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
                 var g = row[x * 3 + 1];
                 var b = row[x * 3 + 2];
                 sumLum += 0.299 * r + 0.587 * g + 0.114 * b;
+                sumR += r;
                 sumG += g;
                 sumB += b;
                 count++;
@@ -409,12 +411,32 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
 
             luminosities[i] = count > 0 ? sumLum / count : 0;
 
-            // Heuristique couleur Synthesia : main droite typiquement verte, main gauche
-            // typiquement bleue. Les couleurs varient selon le logiciel source — à ajuster
-            // une fois testé sur de vraies vidéos si SeparateHandsByColor donne de mauvais
-            // résultats (idée : rendre les 2 couleurs de référence configurables).
-            channels[i] = separateHandsByColor && count > 0 && sumB > sumG ? 1 : 0;
+            // Couleur moyenne de la touche (teinte / saturation), utilisée par HandAssigner pour
+            // reconnaître les deux couleurs de la vidéo, quelles qu'elles soient (2026-11-11 :
+            // Sunflower est en bleu et rose, l'ancienne règle « bleu > vert = main gauche » ne
+            // séparait rien).
+            (hues[i], saturations[i]) = count > 0
+                ? HueSaturation(sumR / (double)count, sumG / (double)count, sumB / (double)count)
+                : (double.NaN, 0);
         }
+    }
+
+    private static (double Hue, double Saturation) HueSaturation(double r, double g, double b)
+    {
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var delta = max - min;
+        if (max <= 0 || delta <= 0)
+        {
+            return (double.NaN, 0);
+        }
+
+        double hue;
+        if (max == r) hue = 60 * (((g - b) / delta) % 6);
+        else if (max == g) hue = 60 * ((b - r) / delta + 2);
+        else hue = 60 * ((r - g) / delta + 4);
+
+        return ((hue + 360) % 360, delta / max);
     }
 
     private static double Luminosity(ReadOnlySpan<byte> row, int x)

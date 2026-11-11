@@ -28,4 +28,9 @@ public record KeyboardLayout(IReadOnlyList<KeyRegion> Keys, int MiddleCIndex);
 public record KeyRegion(int Index, int StartX, int EndX, bool IsWhite);
 
 /// Channel : 0 = main droite / indifférencié, 1 = main gauche (si separateHandsByColor).
-public record NoteEvent(int MidiNote, double TimestampSeconds, bool IsNoteOn, int Velocity, int Channel);
+/// <summary>
+/// Hue (0–360°) et Saturation (0–1) : couleur moyenne de la touche au moment où elle s'allume
+/// (note-on uniquement, NaN sinon) — sert à attribuer les mains (HandAssigner).
+/// </summary>
+public record NoteEvent(int MidiNote, double TimestampSeconds, bool IsNoteOn, int Velocity, int Channel,
+    double Hue = double.NaN, double Saturation = 0);

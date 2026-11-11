@@ -133,6 +133,11 @@ public class ConversionBackgroundService(
             logger.LogWarning("Aucune note détectée pour la conversion {Id} — threshold trop élevé ?", conversion.Id);
         }
 
+        // 3b. Mains : d'après les deux couleurs de la vidéo (sinon tout en canal 0 = une seule piste).
+        noteEvents = settings.SeparateHandsByColor
+            ? HandAssigner.Assign(noteEvents, logger)
+            : noteEvents.Select(e => e with { Channel = 0 }).ToList();
+
         // 4. Tempo : détecté si demandé, sinon 120 BPM par défaut.
         var bpm = settings.DetectTempo ? keyboardAnalysis.EstimateBpm(noteEvents) : 120;
 
