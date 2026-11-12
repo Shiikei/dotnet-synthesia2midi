@@ -12,7 +12,7 @@ namespace Synthesia2Midi.Services;
 /// Prévisualisation des réglages sur la page /nouvelle, avant toute conversion :
 /// récupère un court extrait de la vidéo à partir de « Début », en tire l'image de cet
 /// instant, puis relit la ligne du clavier exactement comme le pipeline (même décodeur,
-/// même DetectLayout, même référence « repos » = première image). Le résultat est la
+/// même DetectLayout, même référence « repos » = médiane de chaque touche). Le résultat est la
 /// matrice des écarts de luminosité par image et par touche : n'importe quel seuil
 /// s'évalue ensuite dessus sans rien relancer.
 /// </summary>
@@ -122,7 +122,7 @@ public partial class ThresholdPreviewService(
         var hands = new byte[frames * keys.Count];
         var hues = new double[frames * keys.Count];
         var saturations = new double[frames * keys.Count];
-        var rest = new double[keys.Count];
+        var luminosities = new float[frames * keys.Count];
 
         for (var f = 0; f < frames; f++)
         {
@@ -145,19 +145,21 @@ public partial class ThresholdPreviewService(
                     count++;
                 }
 
-                var lum = count > 0 ? sum / count : 0;
-                if (f == 0)
-                {
-                    rest[k] = lum; // même référence que ExtractNoteEvents : la première image
-                }
-
-                // ceil : « écart > seuil » (seuil entier) donne exactement le même résultat
-                // sur l'octet arrondi que sur la valeur réelle.
-                diffs[f * keys.Count + k] = (byte)Math.Min(255, Math.Ceiling(Math.Abs(lum - rest[k])));
+                luminosities[f * keys.Count + k] = (float)(count > 0 ? sum / count : 0);
                 (hues[f * keys.Count + k], saturations[f * keys.Count + k]) = count > 0
                     ? KeyboardAnalysisService.HueSaturation(sumR / (double)count, sumG / (double)count, sumB / (double)count)
                     : (double.NaN, 0);
             }
+        }
+
+        // Même référence « repos » que ExtractNoteEvents : médiane de chaque touche sur l'extrait
+        // (bug #18 corrigé le 2026-11-12, avant : la première image).
+        var rest = KeyboardAnalysisService.RestLuminosities(luminosities, frames, keys.Count);
+        for (var i = 0; i < diffs.Length; i++)
+        {
+            // ceil : « écart > seuil » (seuil entier) donne le même résultat sur l'octet arrondi
+            // que sur la valeur réelle (à l'arrondi float près).
+            diffs[i] = (byte)Math.Min(255, Math.Ceiling(Math.Abs(luminosities[i] - rest[i % keys.Count])));
         }
 
         // Mains : même méthode que la conversion (HandAssigner, deux familles de couleurs). Les

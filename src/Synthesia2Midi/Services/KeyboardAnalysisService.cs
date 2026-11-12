@@ -325,7 +325,7 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
     {
         var keys = layout.Keys;
         var pressed = new bool[keys.Count];
-        double[]? restLuminosities = null;
+        var frames = rows as IReadOnlyList<PixelRow> ?? rows.ToList();
 
         // Buffers réutilisés à chaque frame. Important : toute lecture du ReadOnlySpan<byte>
         // (ref struct, ne peut pas survivre à un `yield return`) doit être terminée avant
@@ -335,13 +335,27 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
         var frameHues = new double[keys.Count];
         var frameSaturations = new double[keys.Count];
 
-        foreach (var frame in rows)
+        // Passe 1 : luminosité de chaque touche sur toutes les images, pour la référence
+        // « touche relâchée » (voir RestLuminosities). 2026-11-12, bug #18 : avant, la référence
+        // était la seule première image ; une touche déjà allumée à cet instant restait fausse
+        // pendant toute la vidéo (ses vraies notes passaient inaperçues, ses relâchements
+        // devenaient des notes).
+        var allLuminosities = new float[frames.Count * keys.Count];
+        for (var f = 0; f < frames.Count; f++)
+        {
+            ComputeFrameKeyStats(frames[f].Rgb.Span, keys, frameLuminosities, frameHues, frameSaturations);
+            for (var i = 0; i < keys.Count; i++)
+            {
+                allLuminosities[f * keys.Count + i] = (float)frameLuminosities[i];
+            }
+        }
+
+        var restLuminosities = RestLuminosities(allLuminosities, frames.Count, keys.Count);
+
+        // Passe 2 : machine à états touche par touche.
+        foreach (var frame in frames)
         {
             ComputeFrameKeyStats(frame.Rgb.Span, keys, frameLuminosities, frameHues, frameSaturations);
-
-            // La toute première frame sert de référence "touches relâchées" (brief : valeur
-            // de repos), en supposant qu'aucune touche n'est enfoncée à l'image 0.
-            restLuminosities ??= (double[])frameLuminosities.Clone();
 
             for (var i = 0; i < keys.Count; i++)
             {
@@ -366,6 +380,37 @@ public class KeyboardAnalysisService(ILogger<KeyboardAnalysisService> logger) : 
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Référence « touche relâchée » de chaque touche : la médiane de sa luminosité sur toutes
+    /// les images. Une touche est relâchée la plus grande partie du morceau, donc la médiane tombe
+    /// sur sa couleur de repos même si elle est allumée au tout début (bug #18, 2026-11-12).
+    /// Partagée avec ThresholdPreviewService pour que le test du seuil reste fidèle à la conversion.
+    /// luminosities : [image × keyCount + touche].
+    /// </summary>
+    internal static double[] RestLuminosities(float[] luminosities, int frames, int keyCount)
+    {
+        var rest = new double[keyCount];
+        if (frames == 0)
+        {
+            return rest;
+        }
+
+        var column = new float[frames];
+        for (var k = 0; k < keyCount; k++)
+        {
+            for (var f = 0; f < frames; f++)
+            {
+                column[f] = luminosities[f * keyCount + k];
+            }
+
+            Array.Sort(column);
+            var mid = frames / 2;
+            rest[k] = frames % 2 == 1 ? column[mid] : (column[mid - 1] + column[mid]) / 2.0;
+        }
+
+        return rest;
     }
 
     /// <summary>
